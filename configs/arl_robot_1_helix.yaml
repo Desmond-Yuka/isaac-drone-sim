@@ -1,0 +1,174 @@
+# 三维 helix 起飞任务；保留完整原生物理配置，不替换资产惯性参数。
+# 单位均为 SI。这里只启用 ARL-Robot-1；不加载 Crazyflie。
+# 来源与未建模项详见 docs/architecture.md。null = 未提供/保留资产值，绝不是 0。
+schema_version: 1
+simulation:
+  dt: 0.005                       # 物理/原生电机积分步长 [s]；数值实验配置，可修改
+  control_decimation: 2            # 控制周期 = dt * decimation；电机仍每物理步更新
+  render_interval: 4
+  device: cuda:0
+  gravity: [0.0, 0.0, -9.81]
+  seed: 0
+  duration_s: 40.0
+  native_overrides:
+    use_fabric: true
+    enable_scene_query_support: false
+    create_stage_in_memory: false
+    logging_level: WARNING
+    physics: {}                   # 全部 PhysxCfg 字段均可递归覆盖，未知字段报错
+
+vehicle:
+  name: arl_robot_1
+  asset_path: assets/Robots/NTNU/ARL-Robot-1/arl_robot_1.usd
+  prim_path: /World/Robot
+  geometry_tolerance_m: 0.0001
+  # 以下是上游 ARL 配置的参考矩阵；运行时还会检查实际 USD/PhysX 几何。
+  allocation_matrix:
+    - [0.0, 0.0, 0.0, 0.0]
+    - [0.0, 0.0, 0.0, 0.0]
+    - [1.0, 1.0, 1.0, 1.0]
+    - [-0.13, -0.13, 0.13, 0.13]
+    - [-0.13, 0.13, 0.13, -0.13]
+    - [-0.07, 0.07, -0.07, 0.07]
+  # 用户明确选择：对角同向仿真设定，并非实机测量。符号是反扭矩系数方向。
+  rotor_directions: [-1, 1, 1, -1]
+  rotor_direction_source: simulation_diagonal_pairs
+  thrusters:
+    thruster_names_expr: [back_left_prop, back_right_prop, front_left_prop, front_right_prop]
+    thrust_range: [0.1, 10.0]       # 每桨 [N]，保留原模型的非零下限
+    thrust_const_range: [0.00000926312, 0.00001826312]  # N/(rps²)，reset 时采样
+    tau_inc_range: [0.05, 0.08]    # 加速 [s]
+    tau_dec_range: [0.005, 0.005]  # 减速 [s]
+    torque_to_thrust_ratio: 0.07   # [m]，反扭矩/推力
+    max_thrust_rate: 100000.0      # 保留上游字段名；源码实际限制 rps 的变化率，见文档
+    use_discrete_approximation: true
+    integration_scheme: rk4
+  initial_state:
+    pos: [0.0, 0.0, 1.0]          # 使用 XY；ground launch 按真实碰撞形状重新计算初始 Z
+    quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]  # 接入层转换成当前 Isaac Lab 的 xyzw
+    lin_vel: [0.0, 0.0, 0.0]
+    ang_vel: [0.0, 0.0, 0.0]
+    rps:                          # 地面起飞：所有电机从零速开始
+      back_left_prop: 0.0
+      back_right_prop: 0.0
+      front_left_prop: 0.0
+      front_right_prop: 0.0
+  launch:
+    from_ground: true           # helix 专用配置启用；按真实碰撞体计算初始高度
+    ground_z_m: 0.0             # 物理地面高度 [m]
+    clearance_m: 0.001          # 初始碰撞体离地间隙，不是地面效应参数 [m]
+  native_overrides:
+    soft_joint_pos_limit_factor: 1.0
+    spawn:
+      activate_contact_sensors: true
+      # 数值来自上游 arl_robot_1.py；不是实测阻尼。额外气动必须单独标定。
+      rigid_props:
+        disable_gravity: false
+        retain_accelerations: false
+        linear_damping: 0.0
+        angular_damping: 0.0
+        max_linear_velocity: 1000.0
+        max_angular_velocity: 1000.0
+        max_depenetration_velocity: 1.0
+      articulation_props:
+        enabled_self_collisions: true
+        solver_position_iteration_count: 4
+        solver_velocity_iteration_count: 0
+      # 未覆盖的碰撞形状、质量、质心、惯量、关节、材质继续使用原资产。
+      # 可添加 mass_props / collision_props / physics_material 等原生配置。
+  usd_overrides: []               # 修改已有 USD 属性，作用域仅限本机型；支持完整惯性参数
+
+control:
+  position_kp: [4.0, 4.0, 2.5]   # 参考上游 Lee 配置范围上界 [s^-2]，尚未调参验飞
+  velocity_kd: [3.5, 3.5, 2.0]   # [s^-1]
+  position_ki: [0.0, 0.0, 0.0]   # 积分默认关闭，可显式开启；不是动力学假设
+  integral_limit_m_s: [1.0, 1.0, 1.0]
+  attitude_kp: [1.85, 1.85, 0.4] # 直接力矩增益 [N m/rad]
+  angular_rate_kd: [0.5, 0.5, 0.09] # [N m s/rad]
+  max_tilt_rad: 1.0471975511965976
+  max_yaw_rate_rad_s: 1.0471975511965976
+  max_acceleration_m_s2: null    # 未额外设置指令加速度限制
+allocation:
+  weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0] # 加权误差的数值缩放，可按 N/Nm 调整
+  regularization: 0.0            # 可显式惩罚相对上一指令的变化
+
+effects:
+  wind:
+    enabled: false
+    model: uniform_gusts
+    velocity_w_m_s: null
+    spatial_gradient_per_s: null
+    reference_position_w_m: null
+    gusts: []
+    turbulence:
+      enabled: false
+      time_constant_s: null
+      stationary_std_w_m_s: null
+  aerodynamic:
+    enabled: false
+    linear_drag_b_kg_s: null
+    quadratic_drag_b_kg_m: null
+    angular_linear_drag_b_nm_s: null
+    center_of_pressure_b_m: null # 相对质心；启用时须实测/辨识后明确给出
+  disturbances: []              # 支持世界/机体系、有时间窗和作用点的外力/力矩
+
+power:
+  enabled: false                # 电气模型未接入；不表示无限电池
+  model: equivalent_circuit
+  current_source: null          # load_model 或 external_measurement；必须接入明确来源
+  calibration_id: null
+  capacity_ah: null
+  initial_soc: null
+  ocv_soc_voltage_table: null    # [[SOC, 端电池开路电压V], ...]，覆盖 0..1
+  series_resistance_ohm: null
+  rc_branches: null             # [] 表示明确选择无极化支路；null 表示未知
+  charge_coulombic_efficiency: null
+  discharge_coulombic_efficiency: null
+  cutoff_voltage_v: null
+  maximum_voltage_v: null
+  max_discharge_current_a: null
+  max_charge_current_a: null
+  calibration_temperature_c: null
+  valid_temperature_range_c: null
+  initial_temperature_c: null
+
+scene:
+  ground:
+    enabled: true
+    prim_path: /World/Ground
+    native_overrides: {}
+  light:
+    enabled: true
+    prim_path: /World/Light
+    intensity: 750.0
+
+trajectory:
+  kind: helix                   # helix / spiral（兼容名）均为三维圆柱螺旋上升
+  hold:
+    position_w_m: null           # null = reset 后真实质心位置
+    yaw_rad: null                # null = reset 后实际朝向
+  spiral:                       # 历史参数段名；几何类型为 helix，非二维 spiral
+    start_delay_s: 2.0           # 电机从零速平滑起转；下面为任务设计值，非硬件标定
+    takeoff_height_m: 1.0        # 先在原地垂直起飞，相对初始真实质心
+    takeoff_duration_s: 4.0
+    radius_m: 1.0                # 恒定半径 [m]
+    turns: 2.0                  # 正数从 +Z 看逆时针；允许负数/非整数
+    climb_height_m: 3.0          # 螺旋段增高 [m]；不是整个任务最终绝对 Z
+    spiral_duration_s: 24.0
+    initial_phase_rad: 0.0
+    yaw_mode: fixed              # fixed 或 tangent；偏航也平滑连接
+    yaw_offset_rad: 0.0
+    initial_speed_tolerance_m_s: 0.001
+    initial_angular_speed_tolerance_rad_s: 0.001
+  completion:
+    position_tolerance_m: 0.10
+    speed_tolerance_m_s: 0.10
+    yaw_tolerance_rad: 0.10
+    angular_speed_tolerance_rad_s: 0.10
+    dwell_time_s: 2.0            # 连续实际满足条件才判定悬停成功
+    max_hold_time_s: 10.0
+
+logging:
+  directory: runs
+  every_n_steps: 1             # 默认每个物理步记录：200 Hz，包含完整基础运动数据
+  flush_every_n_records: 100

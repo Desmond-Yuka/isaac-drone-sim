@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "isaac-drone-sim"
+version = "0.1.0"
+description = "ARL-Robot-1 motion-control architecture for the local Isaac Lab / PhysX stack"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.21", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+usd = ["usd-core>=25.0"]
+
+[tool.setuptools.packages.find]
+include = ["isaac_drone*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
