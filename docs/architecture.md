@@ -158,12 +158,14 @@ python scripts/standalone/run_arl.py --validate
 python scripts/standalone/inspect_arl_asset.py
 ```
 
-在已经正确安装依赖的 Isaac Lab 环境中，从 `IsaacLab/` 目录运行：
+在已经正确安装依赖的 Isaac Lab 环境中（服务器激活 `env_isaacsim` 后），从本仓库根目录运行。Isaac Lab 3.0 已去掉 `--headless`，无画面运行用 `--visualizer none`：
 
 ```bash
-uv run python ../scripts/standalone/run_arl.py --inspect --headless
-uv run python ../scripts/standalone/run_arl.py --headless --duration 10
+python scripts/standalone/run_arl.py --inspect --visualizer none
+python scripts/standalone/run_arl.py --visualizer none --duration 10
 ```
+
+WebRTC 串流用 `--livestream 1`（公网，`PUBLIC_IP` 指定服务器 IP）。Isaac Lab 3.0 把串流主机视为 headless，步进时不会调用 `app.update()`，所以串流时入口脚本在每个渲染步自行刷新 Kit 界面，并在刷新期间关闭 `playSimulations`，不额外推进物理。`--wait-for-start` 在场景加载后保持界面刷新、不推进物理，终端按回车后才开始任务。
 
 也可以直接使用服务器现有 Isaac Lab Python 环境运行同一个脚本。代码不会自动下载 29GB 运行环境，也不会切换到另一个机型。`--inspect` 会加载 PhysX 实际属性并打印分配矩阵/质量/惯量/采样参数，然后退出，不执行飞行控制。
 
@@ -173,7 +175,7 @@ uv run python ../scripts/standalone/run_arl.py --headless --duration 10
 
 ```bash
 python scripts/standalone/helix_ascent.py --validate
-# 然后在完整仿真 Python 环境中运行（可选 --headless）
+# 然后在完整仿真 Python 环境中运行（无画面加 --visualizer none）
 python scripts/standalone/helix_ascent.py
 ```
 

@@ -2,7 +2,7 @@
 
 基于 Isaac Sim 6.1 + 本地 Isaac Lab 3.0 / PhysX 的 ARL-Robot-1 无人机运动控制工程。
 
-已实现通用配置、质心运动控制、有界推力分配、原生电机接入、扰动/气动与电池扩展。螺旋上升保留接口，尚未实现轨迹。当前默认只使用 ARL-Robot-1。
+已实现通用配置、质心运动控制、有界推力分配、原生电机接入、扰动/气动与电池扩展，以及地面起飞—三维 helix 上升—终点悬停任务。当前默认只使用 ARL-Robot-1。
 
 ## 目录
 
@@ -38,10 +38,12 @@
 python3 scripts/standalone/run_arl.py --validate
 python3 -m pytest -q tests
 
-# 已安装 Isaac Lab / Isaac Sim 的环境，从 IsaacLab/ 运行
-uv run python ../scripts/standalone/run_arl.py --inspect --headless
-uv run python ../scripts/standalone/run_arl.py --headless --duration 10
+# 服务器：激活 env_isaacsim 后在本仓库根目录运行。Isaac Lab 3.0 用 --visualizer none 代替 --headless
+python scripts/standalone/run_arl.py --inspect --visualizer none
+python scripts/standalone/run_arl.py --visualizer none --duration 10
 ```
+
+WebRTC 观看：加 `--livestream 1`，并用 `PUBLIC_IP` 指定服务器公网 IP。脚本自己启动 Isaac Sim 并推流，不需要另开 Isaac Sim；同一时间只能有一个进程占用 49100 端口。加 `--wait-for-start` 后，场景加载完先停住，客户端连上看到画面后在终端按回车才开始。
 
 依赖是 NumPy、PyYAML；pytest 用于测试。可用 `python -m pip install -e '.[test]'` 安装。离线 USD 检查工具 `scripts/standalone/inspect_arl_asset.py` 另需 `usd-core`，不需启动仿真。
 
@@ -56,8 +58,10 @@ uv run python ../scripts/standalone/run_arl.py --headless --duration 10
 ```bash
 # 普通 Python 先验证配置
 python3 scripts/standalone/helix_ascent.py --validate
-# 已安装 Isaac Lab / Isaac Sim 的环境，从 IsaacLab/ 运行
-uv run python ../scripts/standalone/helix_ascent.py --headless
+# 服务器无画面运行
+python scripts/standalone/helix_ascent.py --visualizer none
+# 服务器串流观看：先连 WebRTC 客户端，看到画面后在终端按回车开始
+PUBLIC_IP=<服务器公网IP> python scripts/standalone/helix_ascent.py --livestream 1 --wait-for-start
 ```
 
 `spiral_ascent.py` 保留为同一 helix 任务的兼容入口。修改 `trajectory.spiral` 参数段即可配置半径、圈数、上升高度、阶段时长、偏航策略。九次时间多项式使参考在各阶段连接处达到 C4 连续，并在螺旋后半程逐步减速。数学推导见 [docs/spiral_math.md](docs/spiral_math.md)。

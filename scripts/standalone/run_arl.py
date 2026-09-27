@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 from pathlib import Path
 import sys
 
@@ -25,6 +26,8 @@ def parser_for_task():
     parser.add_argument("--inspect", action="store_true", help="Load actual PhysX mass/geometry, print diagnostics, and exit without flying")
     parser.add_argument("--trajectory", choices=("hold", "helix", "spiral"))
     parser.add_argument("--duration", type=float, help="Override simulation duration [s]")
+    parser.add_argument("--wait-for-start", action="store_true",
+                        help="After loading the scene, keep the UI/stream live and start only when Enter is pressed")
     return parser
 
 
@@ -61,14 +64,50 @@ def main(argv=None):
     parser.set_defaults(device=config["simulation"]["device"])
     args = parser.parse_args(argv)
     config["simulation"]["device"] = args.device
+    livestream = args.livestream if args.livestream >= 0 else int(os.environ.get("LIVESTREAM", 0))
     app = AppLauncher(args).app
     try:
-        return run_simulation(app, config, asset_path, inspect_only=args.inspect)
+        return run_simulation(app, config, asset_path, inspect_only=args.inspect,
+                              pump_ui=livestream >= 1, wait_for_start=args.wait_for_start)
     finally:
         app.close()
 
 
-def run_simulation(app, config, asset_path, *, inspect_only=False):
+def _pump_kit_ui():
+    """Refresh the Kit UI/viewport, and thus the WebRTC stream, without stepping physics.
+
+    Isaac Lab 3.0 treats a livestream host as headless and never calls
+    app.update() while stepping, so a connected client would receive no frames.
+    playSimulations is disabled around the update, as in Isaac Lab's KitVisualizer.
+    """
+    import carb.settings
+    import omni.kit.app
+
+    settings = carb.settings.get_settings()
+    previous = settings.get("/app/player/playSimulations")
+    settings.set_bool("/app/player/playSimulations", False)
+    try:
+        omni.kit.app.get_app().update()
+    finally:
+        settings.set_bool("/app/player/playSimulations", True if previous is None else bool(previous))
+
+
+def _aim_viewport(eye, target):
+    """Point the active viewport camera; purely cosmetic, so failures only warn."""
+    try:
+        from pxr import Gf
+        from omni.kit.viewport.utility import get_active_viewport
+        from omni.kit.viewport.utility.camera_state import ViewportCameraState
+
+        viewport = get_active_viewport()
+        state = ViewportCameraState(viewport.get_active_camera(), viewport)
+        state.set_position_world(Gf.Vec3d(*map(float, eye)), False)
+        state.set_target_world(Gf.Vec3d(*map(float, target)), True)
+    except Exception as error:
+        print(f"Viewport camera not set: {error}", flush=True)
+
+
+def run_simulation(app, config, asset_path, *, inspect_only=False, pump_ui=False, wait_for_start=False):
     import random
     import numpy as np
     import torch
@@ -108,6 +147,22 @@ def run_simulation(app, config, asset_path, *, inspect_only=False):
         return 0
     loop = MotionControlLoop(config, backend)
     loop.reset()
+    if pump_ui:
+        start = backend.read_state(0.0).position_w
+        end = loop.trajectory.endpoint_position_w if loop.is_helix else start
+        target = (start + end) / 2
+        _aim_viewport(target + np.array([5.0, -5.0, 2.0]), target)
+    if wait_for_start:
+        import select
+        print("Scene ready: connect the stream client, then press Enter here to start.", flush=True)
+        while app.is_running() and not sim.is_stopped():
+            if pump_ui:
+                _pump_kit_ui()
+            else:
+                sim.render()
+            if select.select([sys.stdin], [], [], 0.02)[0]:
+                sys.stdin.readline()
+                break
     steps = math.ceil(config["simulation"]["duration_s"] / loop.dt_s)
     directory = Path(config["logging"]["directory"])
     if not directory.is_absolute():
@@ -128,7 +183,10 @@ def run_simulation(app, config, asset_path, *, inspect_only=False):
                     sim.render()
                     continue
                 loop.prepare_step()
-                sim.step(render=(loop.step_index+1) % config["simulation"]["render_interval"] == 0)
+                render = (loop.step_index+1) % config["simulation"]["render_interval"] == 0
+                sim.step(render=render)
+                if render and pump_ui:
+                    _pump_kit_ui()
                 robot.update(loop.dt_s)
                 record = loop.finish_step()
                 if record["step"] % config["logging"]["every_n_steps"] == 0 or loop.step_index == steps:
