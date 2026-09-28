@@ -221,7 +221,7 @@ class SyntheticDriver:
 
 def run_simulation(config: dict, *, figures: bool = True, log=print, log_root=None, hooks=()):
     """Fly the configured mission once on the synthetic plant and record a standard run directory."""
-    from isaac_drone.runtime.hooks import FiguresHook
+    from isaac_drone.runtime.hooks import FiguresHook, MetricsHook
     from isaac_drone.runtime.loop import MotionControlLoop
     from isaac_drone.runtime.runner import run_experiment
 
@@ -238,6 +238,6 @@ def run_simulation(config: dict, *, figures: bool = True, log=print, log_root=No
     metadata = {"backend": description, "backend_kind": "synthetic", "state_source": "simulation_truth",
                 "motor_model": "RPS commands through NativeRpsActuator with transcribed native integrators",
                 **loop.run_metadata(), "limitations": description["limitations"]}
-    hooks = [*hooks, *([FiguresHook(log)] if figures else [])]
+    hooks = [*hooks, MetricsHook(log), *([FiguresHook(log)] if figures else [])]
     return run_experiment(loop, SyntheticDriver(backend), config, metadata=metadata, hooks=hooks,
                           log_root=log_root, log=log)

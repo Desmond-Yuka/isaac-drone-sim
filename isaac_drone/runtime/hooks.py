@@ -133,3 +133,17 @@ class FiguresHook(RunHook):
             self.log(f"Plots: {figures[0].parent} ({len(figures)} PNG)")
         except Exception as error:  # figures are a convenience and never change the run result
             self.log(f"Plots not written ({error}); retry: python -m isaac_drone plot {result.run_dir}")
+
+
+class MetricsHook(RunHook):
+    """Write metrics.json (overall and per-phase flight metrics) after the run."""
+
+    def __init__(self, log=print):
+        self.log = log
+
+    def finalize(self, result):
+        try:
+            from isaac_drone.analysis.metrics import write_metrics
+            write_metrics(result.run_dir)
+        except Exception as error:  # metrics are derived data and never change the run result
+            self.log(f"Metrics not written ({error}); retry: python -m isaac_drone summarize {result.run_dir}")

@@ -71,6 +71,25 @@ def build_parser():
     _config_arguments(audit)
     audit.add_argument("--asset", type=Path, help="Inspect this USD instead of vehicle.asset_path")
 
+    sweep = commands.add_parser("sweep", help="Grid of synthetic runs over config values, ranked by a metric",
+                                description="Cartesian product of --grid axes on the synthetic backend, run in "
+                                            "parallel; each point is a full run directory.")
+    _config_arguments(sweep)
+    sweep.add_argument("--grid", action="append", required=True, metavar="KEY.PATH=[V1,V2,...]",
+                       help="One sweep axis (YAML list); repeat for more axes")
+    sweep.add_argument("--workers", type=int, help="Parallel worker processes (default: CPU count)")
+    sweep.add_argument("--rank", default="position_error_rms_m",
+                       help="Metric to sort by, ascending (default: %(default)s; per phase: helix.position_error_rms_m)")
+    sweep.add_argument("--output", type=Path, help="Sweep directory (default: runs/sweep_<UTC time>)")
+    sweep.add_argument("--figures", action="store_true", help="Also write PNG figures for every point")
+
+    compare = commands.add_parser("compare", help="Metrics table and overlaid figures for several runs")
+    compare.add_argument("run_dirs", nargs="+", type=Path, help="Run directories to compare")
+    compare.add_argument("--labels", nargs="+", help="One label per run (default: directory names)")
+    compare.add_argument("--phase", help="Compare one mission phase (e.g. helix) instead of the whole run")
+    compare.add_argument("--output", type=Path, help="Output directory (default: runs/compare_<UTC time>)")
+    compare.add_argument("--no-figures", action="store_true", help="Only write the table")
+
     for name, text in (("plot", "Write PNG figures for a run"), ("summarize", "Per-phase table for a run")):
         command = commands.add_parser(name, help=text)
         command.add_argument("run_dir", nargs="?", type=Path, help="Run directory (default: newest under runs/)")
@@ -97,7 +116,12 @@ def configure(args) -> dict:
 
 def _default_runs_dir(args) -> Path:
     from isaac_drone.runtime.runner import REPO_ROOT
-    return args.runs_dir or REPO_ROOT / "runs"
+    return getattr(args, "runs_dir", None) or REPO_ROOT / "runs"
+
+
+def _utc_stamp() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _validate_report(config, asset_path) -> dict:
@@ -128,6 +152,28 @@ def main(argv=None) -> int:
         else:
             from isaac_drone.analysis.summary import latest_telemetry, summarize_run
             print(summarize_run(args.run_dir or latest_telemetry(_default_runs_dir(args))))
+        return 0
+
+    if command == "compare":
+        if unknown:
+            parser.error("unrecognized arguments: " + " ".join(unknown))
+        from isaac_drone.analysis.compare import compare_runs
+        output = args.output or _default_runs_dir(args) / f"compare_{_utc_stamp()}"
+        report = compare_runs(args.run_dirs, output, labels=args.labels, phase=args.phase,
+                              figures=not args.no_figures)
+        print(report["table"])
+        print(f"\nWritten: {', '.join(str(path) for path in report['files'])}")
+        return 0
+
+    if command == "sweep":
+        if unknown:
+            parser.error("unrecognized arguments: " + " ".join(unknown))
+        from isaac_drone.analysis.sweep import parse_grid, run_sweep
+        base = list(args.overrides) + ([f"simulation.duration_s={args.duration}"] if args.duration else [])
+        report = run_sweep(args.config, parse_grid(args.grid), base_overrides=base, output_dir=args.output,
+                           workers=args.workers, rank=args.rank, figures=args.figures)
+        print(report["table"])
+        print(f"\nSummary: {report['output_dir'] / 'summary.csv'}")
         return 0
 
     config = configure(args)
