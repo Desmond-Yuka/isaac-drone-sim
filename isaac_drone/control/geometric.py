@@ -19,6 +19,7 @@ from isaac_drone.core.validation import finite_array, finite_scalar
 
 from .allocation import AllocationResult
 from .base import CONTROLLERS, ControllerDiagnostics, FlightLimits, VehicleModel
+from .shaping import limited_thrust_vector
 
 
 class GeometricController:
@@ -145,23 +146,8 @@ class GeometricController:
             self._integral[growing] = self._integral_before_step[growing]
 
     def _limited_force(self, acceleration: np.ndarray) -> tuple[np.ndarray, bool]:
-        limited = False
-        magnitude = np.linalg.norm(acceleration)
-        if self.max_acceleration_m_s2 is not None and magnitude > self.max_acceleration_m_s2:
-            acceleration = acceleration * (self.max_acceleration_m_s2 / magnitude)
-            limited = True
-        force = self.mass_kg * (acceleration - self.gravity_w)
-        horizontal = np.linalg.norm(force[:2])
-        sine, cosine = np.sin(self.max_tilt_rad), np.cos(self.max_tilt_rad)
-        if force[2] >= 0 and horizontal * cosine <= force[2] * sine:
-            return force, limited
-        # Orthogonal projection onto a circular cone, including its apex.
-        projection = max(0.0, sine * horizontal + cosine * force[2])
-        direction = np.zeros(3)
-        if horizontal > 0:
-            direction[:2] = sine * force[:2] / horizontal
-        direction[2] = cosine
-        return projection * direction, True
+        return limited_thrust_vector(acceleration, self.mass_kg, self.gravity_w, self.max_tilt_rad,
+                                     self.max_acceleration_m_s2)
 
     def _force_derivatives(self, force: np.ndarray, dt: float, history=None) -> tuple[np.ndarray, np.ndarray]:
         history = self._force_history if history is None else history

@@ -1,0 +1,18 @@
+# 级联 PID 对照组：与 helix_moderate.yaml 同一轨迹，只换控制器（kind 不同 → 整段替换，不继承几何控制器增益）。
+# 增益单位均为 1/s（积分 1/s²）；角速度环按实际完整惯量归一化，所以增益即各环带宽。
+# 在 CPU 合成对象上网格调参，取离失稳边界有余量的一组（姿态/角速度增益比约 0.4，姿态增益 20 时已失稳）；
+# 合成对象上 helix 段最大位置误差约 0.21 m（几何控制器约 0.03 m）。尚未在 Isaac Sim 验飞。
+extends: helix_moderate.yaml
+
+controller:
+  kind: cascaded_pid
+  position_kp: [3.0, 3.0, 3.0]            # [1/s] 位置误差 → 速度修正
+  velocity_kp: [6.0, 6.0, 6.0]            # [1/s] 速度误差 → 加速度
+  velocity_ki: [1.0, 1.0, 1.0]            # [1/s²]
+  velocity_integral_limit_m_s2: [2.0, 2.0, 2.0]
+  attitude_kp: [10.0, 10.0, 3.0]          # [1/s] 姿态误差 → 机体角速度设定
+  rate_kp: [24.0, 24.0, 8.0]              # [1/s] 角速度误差 → 角加速度
+  rate_ki: [0.0, 0.0, 0.0]                # [1/s²] 默认关闭
+  rate_integral_limit_rad_s2: [5.0, 5.0, 5.0]
+  max_velocity_correction_m_s: null       # null = 不限制位置环输出
+  max_body_rate_rad_s: null               # null = 不限制角速度设定
