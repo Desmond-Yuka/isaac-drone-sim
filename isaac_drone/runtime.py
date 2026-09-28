@@ -71,19 +71,31 @@ class MotionControlLoop:
         self._reference_sample_time_s = None
         self._pre_step_truth = None
         self._interval_reference = None
+        self._interval_attitude = None
         self._previous_thrust = None
         self._requested_wrench = Wrench.zero()
         self.effects.reset(self.config["simulation"]["seed"])
         self.trajectory.reset(self.backend.read_state(0.0) if self.is_helix else self.state_provider.read_state(0.0))
         if self.mission is not None:
             from .trajectories.feasibility import validate_helix_feasibility
+            from .trajectories.min_time import plan_minimum_time
             self.mission.reset()
             parameters = self.backend.motor_parameters()
-            self.feasibility = validate_helix_feasibility(
-                self.trajectory, self.config["control"], self.backend.mass_properties(),
-                np.array(self.config["simulation"]["gravity"]), matrix,
-                parameters["thrust_min_n"], parameters["thrust_max_n"],
-            )
+            vehicle = (self.config["control"], self.backend.mass_properties(),
+                       np.array(self.config["simulation"]["gravity"]), matrix,
+                       parameters["thrust_min_n"], parameters["thrust_max_n"])
+            # Null-duration phases get minimum-time laws from the actual vehicle limits. Motor lag
+            # uses the slowest time constant of the sampling range (+dt for the discrete mixing).
+            thrusters = self.config["vehicle"]["thrusters"]
+            lag = self.dt_s if thrusters["use_discrete_approximation"] else 0.0
+            plan = plan_minimum_time(self.trajectory, *vehicle, motor_time_constants_s=(
+                max(thrusters["tau_inc_range"])+lag, max(thrusters["tau_dec_range"])+lag))
+            self.feasibility = {**validate_helix_feasibility(self.trajectory, *vehicle), "minimum_time_plan": plan}
+            required = (self.trajectory.mission_duration_s+self.config["trajectory"]["completion"]["dwell_time_s"]
+                        + 2*self.dt_s)
+            if self.config["simulation"]["duration_s"] < required:
+                raise ValueError(f"simulation.duration_s must allow the complete helix and measured hover dwell: "
+                                 f"planned mission {self.trajectory.mission_duration_s:.3f} s needs >= {required:.3f} s")
         if self.power is not None:
             self.power.reset()
             if initial_current_a is None:
@@ -117,6 +129,8 @@ class MotionControlLoop:
             self._reference_sample_time_s = self.time_s
             self._requested_wrench = self.controller.compute(state, self.setpoint, self.dt_s*self.decimation)
         self._interval_reference = deepcopy(self.setpoint)
+        # Held with the setpoint: the controller only changes them in compute().
+        self._interval_attitude = (self.controller.desired_rotation_w, self.controller.desired_angular_velocity_d)
         motor_parameters = self.backend.motor_parameters()
         lower = finite_array(motor_parameters["thrust_min_n"], (4,), "motor minimum thrust")
         upper = finite_array(motor_parameters["thrust_max_n"], (4,), "motor maximum thrust")
@@ -202,6 +216,9 @@ class MotionControlLoop:
             Wrench.from_vector(self._record["requested_wrench_b"]),
             Wrench.from_vector(self._record["allocated_wrench_b"]),
             Wrench.from_vector(self._record["external_wrench_b"]),
+            desired_rotation_w=self._interval_attitude[0],
+            desired_angular_velocity_d=self._interval_attitude[1],
+            motor_command_rps=self._record["motor_command_rps"],
         )
         if self.power is not None:
             power_state = self.power.update(truth, telemetry, self.dt_s,

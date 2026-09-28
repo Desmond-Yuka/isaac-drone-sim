@@ -9,7 +9,7 @@ simulation:
   device: cuda:0
   gravity: [0.0, 0.0, -9.81]
   seed: 0
-  duration_s: 40.0
+  duration_s: 20.0                # 规划后的任务约 11 s（起转 2 s + 起飞 + 螺旋），其余时间在终点悬停
   native_overrides:
     use_fabric: true
     enable_scene_query_support: false
@@ -79,14 +79,15 @@ vehicle:
   usd_overrides: []               # 修改已有 USD 属性，作用域仅限本机型；支持完整惯性参数
 
 control:
-  position_kp: [4.0, 4.0, 2.5]   # 参考上游 Lee 配置范围上界 [s^-2]，尚未调参验飞
-  velocity_kd: [3.5, 3.5, 2.0]   # [s^-1]
+  # 高速 helix：电机滞后(τ≤80 ms)使推力跟不上时靠反馈追回；CPU 合成对象上调到阻尼比≈1，尚未验飞
+  position_kp: [12.0, 12.0, 8.0] # [s^-2]
+  velocity_kd: [7.0, 7.0, 5.0]   # [s^-1]
   position_ki: [0.0, 0.0, 0.0]   # 积分默认关闭，可显式开启；不是动力学假设
   integral_limit_m_s: [1.0, 1.0, 1.0]
   attitude_kp: [1.85, 1.85, 0.4] # 直接力矩增益 [N m/rad]
   angular_rate_kd: [0.5, 0.5, 0.09] # [N m s/rad]
-  max_tilt_rad: 1.0471975511965976
-  max_yaw_rate_rad_s: 1.0471975511965976
+  max_tilt_rad: 1.3962634015954636  # 80°：最快 helix 名义倾角约 68°，其余留给反馈
+  max_yaw_rate_rad_s: 6.283185307179586  # tangent 机头巡航偏航速率约 5 rad/s
   max_acceleration_m_s2: null    # 未额外设置指令加速度限制
 allocation:
   weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0] # 加权误差的数值缩放，可按 N/Nm 调整
@@ -150,14 +151,15 @@ trajectory:
   spiral:                       # 历史参数段名；几何类型为 helix，非二维 spiral
     start_delay_s: 2.0           # 电机从零速平滑起转；下面为任务设计值，非硬件标定
     takeoff_height_m: 1.0        # 先在原地垂直起飞，相对初始真实质心
-    takeoff_duration_s: 4.0
+    takeoff_duration_s: null     # null = 按实际推力包线规划最短时间；填数字 = 固定时长九次多项式
     radius_m: 1.0                # 恒定半径 [m]
-    turns: 2.0                  # 正数从 +Z 看逆时针；允许负数/非整数
-    climb_height_m: 3.0          # 螺旋段增高 [m]；不是整个任务最终绝对 Z
-    spiral_duration_s: 24.0
-    initial_phase_rad: 0.0
-    yaw_mode: fixed              # fixed 或 tangent；偏航也平滑连接
+    turns: 5.0                  # 正数从 +Z 看逆时针；允许负数/非整数
+    climb_height_m: 5.0          # 螺旋段增高 [m]；不是整个任务最终绝对 Z
+    spiral_duration_s: null      # null = 最短时间：加速—匀速巡航—减速
+    initial_phase_rad: -1.5707963267948966  # -π/2：切向机头与初始机头一致，起飞时不用转头
+    yaw_mode: tangent            # fixed 或 tangent；高速时 tangent 四桨推力均衡，能用满推力
     yaw_offset_rad: 0.0
+    thrust_utilization: 0.85     # 名义每桨推力限制在推力范围的 15%~85%（转速最高约 92%），两端余量留给反馈
     initial_speed_tolerance_m_s: 0.001
     initial_angular_speed_tolerance_rad_s: 0.001
   completion:

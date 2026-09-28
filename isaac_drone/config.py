@@ -227,9 +227,11 @@ def validate_config(config: dict) -> None:
         plan = trajectory["spiral"]
         if plan["start_delay_s"] <= 0:
             raise ConfigurationError("Ground helix requires positive start_delay_s for motor spin-up")
-        mission_time = plan["start_delay_s"]+plan["takeoff_duration_s"]+plan["spiral_duration_s"]
-        if sim["duration_s"] < mission_time+trajectory["completion"]["dwell_time_s"]+2*sim["dt"]:
-            raise ConfigurationError("simulation.duration_s must allow the complete helix and measured hover dwell")
+        # A null (minimum-time) duration is known only after planning; runtime reset checks it then.
+        if plan["takeoff_duration_s"] is not None and plan["spiral_duration_s"] is not None:
+            mission_time = plan["start_delay_s"]+plan["takeoff_duration_s"]+plan["spiral_duration_s"]
+            if sim["duration_s"] < mission_time+trajectory["completion"]["dwell_time_s"]+2*sim["dt"]:
+                raise ConfigurationError("simulation.duration_s must allow the complete helix and measured hover dwell")
     scene = config["scene"]
     _keys(scene, {"ground", "light"}, {"ground", "light"}, "scene")
     for field in ("ground", "light"):

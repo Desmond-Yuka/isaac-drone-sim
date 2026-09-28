@@ -167,6 +167,8 @@ python scripts/standalone/run_arl.py --visualizer none --duration 10
 
 WebRTC 串流用 `--livestream 1`（公网，`PUBLIC_IP` 指定服务器 IP）。Isaac Lab 3.0 把串流主机视为 headless，步进时不会调用 `app.update()`，所以串流时入口脚本在每个渲染步自行刷新 Kit 界面，并在刷新期间关闭 `playSimulations`，不额外推进物理。`--wait-for-start` 在场景加载后保持界面刷新、不推进物理，终端按回车后才开始任务。
 
+有画面（串流或本地窗口）时，`isaac_drone/playback.py` 按墙钟对齐仿真时间，默认 `--playback-speed 1` 即真实时间；`0` 关闭对齐。每个渲染步：仿真超前就等待；刷新界面比帧间隔慢、仿真落后超过 50 ms 时跳过该帧，让物理追上，但至少每 0.25 s 画一帧。结束事件 `finished.playback` 记录墙钟时长、实际倍速、已画/跳过帧数和平均刷新耗时；若物理和记录本身就慢于实时，这里会如实显示达不到的倍速。`isaac_drone/visualization.py` 在 `/World/Visuals` 下创建纯显示用的 USD 几何（不带任何物理/碰撞 API）：绿色虚线为参考质心轨迹，红色实线为实际质心轨迹（每移动 5 mm 记一点，在渲染帧写入），绿色小球为当前时刻的参考点；`--no-path-overlay` 关闭。无画面运行不创建这些几何，也不做墙钟对齐。
+
 也可以直接使用服务器现有 Isaac Lab Python 环境运行同一个脚本。代码不会自动下载 29GB 运行环境，也不会切换到另一个机型。`--inspect` 会加载 PhysX 实际属性并打印分配矩阵/质量/惯量/采样参数，然后退出，不执行飞行控制。
 
 运行结果默认写到 `runs/<UTC时间_唯一编号>/`，包含配置快照、所有本地 USD 层 SHA256、实际物理参数、`telemetry.jsonl`、`basic.csv` 和 `telemetry_schema.json`。默认每物理步记录一次（当前200 Hz），包含位置、速度、加速度、四电机转速、力/力矩及位置误差；日志区分期望、分配结果、原生电机实际输出、附加力与运动推导的净作用。禁用电池记录 null，不记录虚构 SOC。完整字段和时间语义见 [telemetry.md](telemetry.md)。

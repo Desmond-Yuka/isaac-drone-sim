@@ -194,6 +194,15 @@ def test_helix_starts_with_zero_motor_speed_and_retains_measured_ground_origin()
     assert np.all(second["motor_command_thrust_n"] < second["allocated_thrust_n"])
     assert len(backend.speed_commands) == 2
     loop.finish_step()
+    # The preset's null durations are planned for minimum time at reset.
+    plan = loop.feasibility["minimum_time_plan"]
+    assert plan["planned_phases"] == ["takeoff", "spiral"]
+    assert loop.feasibility["phase_boundaries_s"] == loop.trajectory.phase_boundaries_s
+    assert cfg["simulation"]["duration_s"] >= loop.trajectory.mission_duration_s
+    short = load_config(HELIX_CONFIG)
+    short["simulation"]["duration_s"] = loop.trajectory.mission_duration_s
+    with pytest.raises(ValueError, match="dwell"):
+        MotionControlLoop(short, SpeedOnlyGroundBackend()).reset()
 
 
 def test_helix_reference_anchors_to_truth_even_with_biased_estimator():

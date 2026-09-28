@@ -65,6 +65,9 @@ def test_helix_preset_rejects_airborne_nonzero_motors_and_truncated_mission():
         bad["vehicle"][section][key] = value
         with pytest.raises(ValueError):
             validate_config(bad)
+    # Fixed durations are checked statically; null (minimum-time) ones at runtime reset.
+    assert cfg["trajectory"]["spiral"]["spiral_duration_s"] is None
+    cfg["trajectory"]["spiral"].update(takeoff_duration_s=4.0, spiral_duration_s=24.0)
     cfg["simulation"]["duration_s"] = 31.0
     with pytest.raises(ValueError, match="dwell"):
         validate_config(cfg)

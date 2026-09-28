@@ -60,6 +60,39 @@ def quaternion_to_matrix(quaternion_wxyz: np.ndarray) -> np.ndarray:
     )
 
 
+def matrix_to_quaternion(rotation: np.ndarray) -> np.ndarray:
+    """Unit wxyz quaternion of a rotation matrix, with the scalar part nonnegative."""
+    m = validate_rotation(rotation)
+    trace = np.trace(m)
+    # Shepperd: divide by the largest of the four candidate components.
+    if trace >= max(m[0, 0], m[1, 1], m[2, 2]):
+        s = 2.0 * np.sqrt(1.0 + trace)
+        q = np.array([s / 4, (m[2, 1] - m[1, 2]) / s, (m[0, 2] - m[2, 0]) / s, (m[1, 0] - m[0, 1]) / s])
+    else:
+        i = int(np.argmax(np.diag(m)))
+        j, k = (i + 1) % 3, (i + 2) % 3
+        s = 2.0 * np.sqrt(1.0 + m[i, i] - m[j, j] - m[k, k])
+        q = np.empty(4)
+        q[0] = (m[k, j] - m[j, k]) / s
+        q[1 + i] = s / 4
+        q[1 + j] = (m[j, i] + m[i, j]) / s
+        q[1 + k] = (m[k, i] + m[i, k]) / s
+    q /= np.linalg.norm(q)
+    return -q if q[0] < 0 else q
+
+
+def rotation_to_rpy(rotation: np.ndarray) -> np.ndarray:
+    """Roll, pitch, yaw [rad] of a body-to-world rotation, Z-Y-X (yaw first) convention."""
+    m = finite_array(rotation, (3, 3), "rotation")
+    return np.array([np.arctan2(m[2, 1], m[2, 2]), np.arcsin(np.clip(-m[2, 0], -1.0, 1.0)),
+                     np.arctan2(m[1, 0], m[0, 0])])
+
+
+def wrap_angle(angle):
+    """Wrap angles to [-pi, pi)."""
+    return (np.asarray(angle, dtype=np.float64) + np.pi) % (2.0 * np.pi) - np.pi
+
+
 def validate_rotation(rotation: np.ndarray, name: str = "rotation") -> np.ndarray:
     result = finite_array(rotation, (3, 3), name)
     if not np.allclose(result.T @ result, np.eye(3), rtol=0.0, atol=1e-7) or not np.isclose(

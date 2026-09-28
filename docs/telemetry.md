@@ -24,6 +24,49 @@
 
 同时保存目标位置/速度/加速度、四元数、角速度/角加速度、分配后的力/力矩、扰动力/力矩，以及每桨命令推力和实际推力。
 
+## 理想值、实际值与误差
+
+每个被跟踪的量都同时记录理想值、实际值和误差。误差一律为**理想值 − 实际值**，与对应的一对量同一参考系、同一单位；模长列给出三维大小。
+
+| 量 | 理想值 | 实际值 | 误差 |
+|---|---|---|---|
+| 位置 | `target_position_w_m`（轨迹目标） | `position_w_m` | `position_error_w_m`、`position_error_norm_m` |
+| 速度 | `target_velocity_w_m_s` | `velocity_w_m_s` | `velocity_error_w_m_s`、`velocity_error_norm_m_s` |
+| 加速度 | `target_acceleration_w_m_s2` | `acceleration_w_m_s2`（速度差分） | `acceleration_error_w_m_s2`、`acceleration_error_norm_m_s2` |
+| 姿态 | `target_quaternion_wxyz`、`target_attitude_rpy_rad`（控制器期望姿态 R_d） | `quaternion_wxyz`、`attitude_rpy_rad` | `attitude_error_rpy_rad`（逐角差，回绕到 ±π）、`attitude_error_angle_rad`（实际转到期望的单次旋转角） |
+| 角速度 | `target_angular_velocity_b_rad_s`（控制器期望角速度，转到实际机体系） | `angular_velocity_b_rad_s` | `angular_velocity_error_b_rad_s`、`angular_velocity_error_norm_rad_s` |
+| 电机转速 | `motor_speed_command_rps` / `_rpm`（送给电机模型的命令） | `motor_speed_rps` / `_rpm` | `motor_speed_error_rps` / `_rpm` |
+| 单桨推力 | `motor_thrust_command_n` | `motor_thrust_applied_n` | `motor_thrust_error_n` |
+| 力 | `force_command_b_n`（控制需求） | `force_motor_b_n`（电机输出） | `force_error_b_n`、`force_error_norm_n` |
+| 力矩 | `torque_command_b_nm` | `torque_motor_b_nm` | `torque_error_b_nm`、`torque_error_norm_nm` |
+
+说明：
+
+- 姿态用 Z-Y-X 欧拉角（滚转、俯仰、偏航）方便阅读，四元数仍是无歧义的原始记录。逐角误差不是旋转向量；判断姿态误差大小请看 `attitude_error_angle_rad`。
+- 力/力矩误差 = 控制需求 − 电机输出，包含分配饱和与电机响应滞后两部分；分配后的中间值仍在 `force_allocated_b_n` / `torque_allocated_b_nm`。
+- 运动推导的净力 `force_net_w_n` 是结果量，其理想值即质量 × 目标加速度，误差等于质量 × 加速度误差，因此不重复记录。
+- 目标在控制周期内保持不变（默认物理 200 Hz、控制 100 Hz），实际值每个物理步都在变化，所以误差在相邻两步之间会有小幅锯齿，这是保持目标的真实结果，不是记录错误。
+- 没有理想值来源时（例如旧版日志或自定义后端），相应理想值和误差列留空，不填 0。
+
+## 图像
+
+每次飞行结束后自动在 `runs/<运行目录>/plots/` 生成英文 PNG；CSV/JSONL 仍是原始数据，图像只是派生视图。也可以对任意一次运行（包括拷回本地的目录）重新生成，只需 NumPy 和 matplotlib：
+
+```bash
+python scripts/standalone/plot_run.py                 # 最新一次运行
+python scripts/standalone/plot_run.py runs/<运行目录>  # 指定运行
+```
+
+| 文件 | 内容 |
+|---|---|
+| `trajectory_3d.png` | 质心三维轨迹与俯视图，实际 vs 目标 |
+| `position.png` / `velocity.png` / `acceleration.png` | 三轴实际 vs 目标，末行为误差和误差模长（图例给出最大值和 RMS）；加速度另画 PhysX 求解器值 |
+| `attitude.png` / `angular_velocity.png` | 滚转/俯仰/偏航（deg）与机体角速度（deg/s），实际 vs 期望，末行为误差 |
+| `motor_speed.png` / `rotor_thrust.png` | 四个电机转速（rpm）与单桨推力，实际 vs 命令，末行为误差 |
+| `force.png` / `torque.png` | 机体系力/力矩，电机输出 vs 控制需求，末行为误差 |
+
+竖虚线为任务阶段（delay / takeoff / helix / hold）分界。旧版日志缺少的误差列会在画图时用"理想 − 实际"补算，缺少理想值的量只画实际值。
+
 ## 时间对齐
 
 每条 `basic` 记录有四个时间字段：

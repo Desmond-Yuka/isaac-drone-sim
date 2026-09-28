@@ -15,10 +15,41 @@ from isaac_drone.control.allocation import BoundedAllocator
 from isaac_drone.control.math import desired_attitude_kinematics, finite_array, finite_scalar
 from isaac_drone.types import MassProperties, Wrench
 from .spiral import SpiralTrajectory, validate_spiral_config
+from .timing import HermiteTimeLaw
 
 
 _RESIDUAL_RTOL = 1e-7
 _RESIDUAL_ATOL = 1e-9
+
+
+def nominal_requirement(reference, mass: float, inertia: np.ndarray, gravity: np.ndarray, where: str = ""):
+    """Ideal-tracking collective thrust [N], body torque [N m], tilt [rad], body rate.
+
+    ``f = ||m(a_d-g)||`` and ``M = J alpha_d + omega_d x (J omega_d)``, with the
+    desired attitude derivatives taken analytically from jerk, snap and yaw.
+    """
+    if reference.jerk_w is None or reference.snap_w is None:
+        raise ValueError("Analytic helix feasibility requires reference jerk and snap")
+    force_w = mass*(reference.acceleration_w-gravity)
+    thrust = float(np.linalg.norm(force_w))
+    if not np.isfinite(thrust) or thrust <= 1e-10:
+        raise ValueError(f"Nominal thrust direction is degenerate at {where}")
+    tilt = float(np.arctan2(np.linalg.norm(force_w[:2]), force_w[2]))
+    _, omega, alpha = desired_attitude_kinematics(
+        force_w, mass*reference.jerk_w, mass*reference.snap_w,
+        reference.yaw_rad, reference.yaw_rate_rad_s, reference.yaw_acceleration_rad_s2)
+    torque = inertia@alpha+np.cross(omega, inertia@omega)
+    return thrust, torque, tilt, omega
+
+
+def _segment_sample_count(trajectory, phase: str, name: str, start: float, end: float) -> int:
+    law = trajectory.time_laws[phase]
+    if isinstance(law, HermiteTimeLaw):
+        return 33 if phase == "takeoff" else 65
+    if phase == "spiral" and name == "cruise":
+        turns = abs(trajectory.config["turns"])*law.cruise_rate*(end-start)
+        return max(33, math.ceil(16*turns)+1)
+    return 33
 
 
 def validate_helix_feasibility(
@@ -32,9 +63,11 @@ def validate_helix_feasibility(
 ) -> dict:
     """Check hover, exact yaw-rate peaks, and sampled nominal feedforward.
 
-    The trajectory must already be reset to its intended actual starting state.
-    Two motion phases are sampled at 33 and 65 uniform times respectively,
-    including their boundaries and midpoints. All sample times are returned.
+    The trajectory must already be reset (and any null-duration phase planned)
+    at its intended actual starting state. Every time-law segment is sampled
+    uniformly including its boundaries: a Hermite takeoff at 33 and a Hermite
+    helix at 65 times, each ramp of a cruise law at 33, and a helix cruise at
+    no fewer than 16 samples per turn. All sample times are returned.
     Reference acceleration, required tilt and instantaneous rotor thrust bounds
     are checked without silently clipping any trajectory value.
 
@@ -52,6 +85,7 @@ def validate_helix_feasibility(
     # This module is part of the trajectory package and uses the implementation's
     # established absolute reset origin, never assuming every mission starts at 0.
     trajectory.endpoint_position_w  # Raises clearly if reset has not completed.
+    boundaries = trajectory.phase_boundaries_s  # Raises clearly if timing is unplanned.
     origin = trajectory._time_origin
     cfg = trajectory.config
     gravity = finite_array(gravity_w, (3,), "gravity_w")
@@ -82,14 +116,10 @@ def validate_helix_feasibility(
         if maximum_acceleration <= 0:
             raise ValueError("max_acceleration_m_s2 must be positive or None")
 
-    takeoff_start = origin+cfg["start_delay_s"]
-    helix_start = origin+cfg["start_delay_s"]+cfg["takeoff_duration_s"]
-    mission_end = origin+trajectory.mission_duration_s
-    first = trajectory.sample(takeoff_start)
-    at_helix = trajectory.sample(helix_start)
-    peak_progress = 315.0/128.0
-    yaw_takeoff_peak = abs(at_helix.yaw_rad-first.yaw_rad)*peak_progress/cfg["takeoff_duration_s"]
-    yaw_helix_peak = (abs(2.0*math.pi*cfg["turns"])*peak_progress/cfg["spiral_duration_s"]
+    laws = trajectory.time_laws
+    # Yaw is linear in the phase progress, so its rate peaks where sigma' does.
+    yaw_takeoff_peak = abs(trajectory.takeoff_yaw_change_rad)*laws["takeoff"].peak_rate
+    yaw_helix_peak = (abs(trajectory.turn_angle_rad)*laws["spiral"].peak_rate
                       if cfg["yaw_mode"] == "tangent" else 0.0)
     yaw_peak = max(yaw_takeoff_peak, yaw_helix_peak)
     if yaw_peak > maximum_yaw_rate+1e-12*max(1.0, maximum_yaw_rate):
@@ -115,29 +145,20 @@ def validate_helix_feasibility(
     hover_wrench = Wrench([0, 0, mass*gravity_norm], np.zeros(3))
     hover = allocate_exact(hover_wrench, "Static hover infeasible")
 
-    times = np.unique(np.r_[origin, np.linspace(takeoff_start, helix_start, 33),
-                            np.linspace(helix_start, mission_end, 65)])
+    times = np.unique(np.r_[origin, np.concatenate([
+        np.linspace(start, end, _segment_sample_count(trajectory, phase, name, start, end))
+        for phase, name, start, end in trajectory.segments()])])
     sampled_thrusts, acceleration_norms, tilts, angular_speeds, torque_norms, residuals = [], [], [], [], [], []
     for time in times:
         reference = trajectory.sample(float(time))
-        if reference.jerk_w is None or reference.snap_w is None:
-            raise ValueError("Analytic helix feasibility requires reference jerk and snap")
         acceleration_norm = float(np.linalg.norm(reference.acceleration_w))
         if maximum_acceleration is not None and acceleration_norm > maximum_acceleration+1e-10:
             raise ValueError(f"Reference acceleration {acceleration_norm:.9g} m/s^2 at t={time:.9g} s "
                              f"exceeds control max_acceleration_m_s2={maximum_acceleration:.9g}")
-        force_w = mass*(reference.acceleration_w-gravity)
-        thrust = float(np.linalg.norm(force_w))
-        if not np.isfinite(thrust) or thrust <= 1e-10:
-            raise ValueError(f"Nominal thrust direction is degenerate at t={time:.9g} s")
-        tilt = float(np.arctan2(np.linalg.norm(force_w[:2]), force_w[2]))
+        thrust, torque, tilt, omega = nominal_requirement(reference, mass, inertia, gravity, f"t={time:.9g} s")
         if tilt > maximum_tilt+1e-10:
             raise ValueError(f"Nominal required tilt {tilt:.9g} rad at t={time:.9g} s "
                              f"exceeds control max_tilt_rad={maximum_tilt:.9g}")
-        _, omega, alpha = desired_attitude_kinematics(
-            force_w, mass*reference.jerk_w, mass*reference.snap_w,
-            reference.yaw_rad, reference.yaw_rate_rad_s, reference.yaw_acceleration_rad_s2)
-        torque = inertia@alpha+np.cross(omega, inertia@omega)
         result = allocate_exact(Wrench([0, 0, thrust], torque), f"Helix feedforward infeasible at t={time:.9g} s")
         sampled_thrusts.append(result.thrusts_n)
         acceleration_norms.append(acceleration_norm)
@@ -146,6 +167,7 @@ def validate_helix_feasibility(
         torque_norms.append(float(np.linalg.norm(torque)))
         residuals.append(result.residual)
     thrusts = np.array(sampled_thrusts)
+    thrust_fraction = thrusts.max(axis=0)/upper
     return {
         "status": "passed_nominal_sampled_checks",
         "continuous_time_certificate": False,
@@ -165,6 +187,11 @@ def validate_helix_feasibility(
         "sampled_min_lower_thrust_margin_n": (thrusts-lower).min(axis=0).tolist(),
         "sampled_min_upper_thrust_margin_n": (upper-thrusts).min(axis=0).tolist(),
         "sampled_max_absolute_allocation_residual": np.abs(residuals).max(axis=0).tolist(),
+        # With one fixed k_f per rotor, n/n_max = sqrt(f/f_max).
+        "sampled_max_thrust_fraction_of_max": thrust_fraction.tolist(),
+        "sampled_max_motor_speed_fraction_of_max": np.sqrt(thrust_fraction).tolist(),
+        "phase_boundaries_s": boundaries,
+        "timing": trajectory.timing_report(),
         "hover_thrusts_n": hover.thrusts_n.tolist(),
         "hover_allocation_residual": hover.residual.tolist(),
         "lower_thrust_n": lower.tolist(),

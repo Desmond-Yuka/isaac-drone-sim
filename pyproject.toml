@@ -11,6 +11,7 @@ dependencies = ["numpy>=1.21", "PyYAML>=6.0"]
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+plot = ["matplotlib>=3.5"]
 usd = ["usd-core>=25.0"]
 
 [tool.setuptools.packages.find]
