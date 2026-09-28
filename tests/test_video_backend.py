@@ -30,13 +30,13 @@ def kit(monkeypatch):
         def __init__(self, path, size):
             self.path, self.size = path, size
             self.paused, self.destroyed = False, 0
+            # Replicator 1.13.36 exposes the render switch on the nested
+            # Hydra texture; the product has no pause()/resume() methods.
+            self.hydra_texture = types.SimpleNamespace(set_updates_enabled=self._set_updates_enabled)
             state.products.append(self)
 
-        def resume(self):
-            self.paused = False
-
-        def pause(self):
-            self.paused = True
+        def _set_updates_enabled(self, enabled):
+            self.paused = not enabled
 
         def destroy(self):
             self.destroyed += 1

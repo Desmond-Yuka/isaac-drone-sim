@@ -112,7 +112,7 @@ class IsaacCameraRig:
             raise RuntimeError("Isaac Sim stopped before the recording frame was captured")
         try:
             for product in self._products.values():
-                product.resume()
+                product.hydra_texture.set_updates_enabled(True)
             # SimulationContext.render() alone does not pump Kit in Lab 3.0
             # when --visualizer none is selected. forward() explicitly syncs
             # PhysX poses into Fabric before the shared offscreen render.
@@ -149,10 +149,10 @@ class IsaacCameraRig:
             return frames
         finally:
             # UI/stream redraws between video samples must not render every
-            # recording camera. resume() occurs only at the next capture.
+            # recording camera. Re-enable updates only at the next capture.
             for product in self._products.values():
                 with contextlib.suppress(Exception):
-                    product.pause()
+                    product.hydra_texture.set_updates_enabled(False)
 
     def read(self, poses: dict[str, dict]) -> dict[str, np.ndarray]:
         """Update all cameras, then synchronously capture all requested views."""
