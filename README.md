@@ -19,6 +19,7 @@
 | `isaac_drone/backends/` | 真实 PhysX 质量/惯量/几何、原生电机和合力提交 |
 | `isaac_drone/trajectories/` | hold 联调目标、起飞—三维 helix—终点悬停的解析轨迹 |
 | `isaac_drone/runtime.py` | 控制与物理步调度、复位、模型耦合 |
+| `isaac_drone/recording.py`、`recording_views.py`、`backends/video.py` | 可选多机位录制、实际位置跟随、同步拼屏 |
 | `scripts/script_editor/` | 粘贴到 Isaac Sim 界面 Script Editor 里运行的脚本 |
 | `scripts/standalone/` | 独立运行的脚本（`env_isaacsim/bin/python xxx.py` 或 Isaac Lab） |
 | `configs/` | 无人机、控制器、仿真参数配置（每次测试一版参数） |
@@ -91,6 +92,60 @@ python3 scripts/standalone/validate_helix_numerics.py --output runs/helix_cpu_re
 加速度同时保留每步速度差分值与可用的 PhysX 求解器值；电机转速来自直接积分的 RPS 电机状态，不冒称编码器测量。力/力矩区分控制需求、电机输出、提交值和由运动推导的净值。
 
 字段定义、时间对齐、误差符号及记录频率见 [docs/telemetry.md](docs/telemetry.md)。文件在实际运行后写入 `runs/<时间_编号>/`。
+
+## 可选多机位视频录制
+
+**默认不录制**。仅在需要的运行命令后加 `--record-video`，同时输出每个机位的独立 MP4 和多机位同步拼屏 `combined.mp4`。普通、helix 和兼容的 spiral 入口共用此功能，可配合 WebRTC，也可在 `--visualizer none` 下离屏录制。
+
+```bash
+# 在运行 Isaac Sim 的 Python 环境中安装一次可选编码依赖
+python -m pip install -e '.[video]'
+
+# 默认 60 FPS、每机位 1280×720，三个机位 + 同步拼屏
+python scripts/standalone/helix_ascent.py --visualizer none --record-video
+
+# 120 FPS；或者修改 YAML 的 recording.fps
+python scripts/standalone/helix_ascent.py --visualizer none --record-video --video-fps 120
+
+# 边看 WebRTC 边录制，按回车后才录制飞行
+PUBLIC_IP=<服务器公网IP> python scripts/standalone/helix_ascent.py --livestream 1 --wait-for-start --record-video
+
+# 仅选择全景和跟随机位，调整每路分辨率
+python scripts/standalone/run_arl.py --visualizer none --record-video --video-cameras overview follow --video-width 1920 --video-height 1080
+
+# 即使 YAML 开启录制，也可单次关闭
+python scripts/standalone/helix_ascent.py --visualizer none --no-record-video
+```
+
+默认机位：
+
+| 文件 | 画面 |
+|---|---|
+| `overview.mp4` | 固定全景，按计划轨迹范围自动取景 |
+| `follow.mp4` | 斜后上方跟随，随无人机**实际质心位置**平移，保持稳定地平线 |
+| `top.mp4` | 动态俯视，始终位于无人机实际位置正上方 |
+| `combined.mp4` | 同步拼屏：全景在上，跟随与俯视在下；默认尺寸 1280×1080 |
+
+视频与 `basic.csv` 一起保存在 `runs/<时间_编号>/`。若自选机位，拼屏顺序采用 `cameras` 的列表顺序：三路为上方第一路、下方第二/第三路；两路左右并排；单路原样输出。各独立视频保留完整配置分辨率，三路拼屏下方两路缩小为一半宽高。
+
+两个配置文件均包含：
+
+```yaml
+recording:
+  enabled: false
+  fps: 60
+  width: 1280
+  height: 720
+  cameras: [overview, follow, top]
+```
+
+命令行覆盖当次配置；只设置 `--video-fps`、尺寸或机位不会自动开启录制。帧率须为正整数，且录制时不超过物理频率 `1/simulation.dt`（当前 200 Hz）；尺寸须为正偶数。60、120 FPS 无需整除 200 Hz：每个采样时刻使用到达它的第一个物理步状态，误差小于一个物理步，不插值伪造飞行状态。
+
+各机位在同一个物理时刻统一渲染，拼屏直接使用这批图像，全部按同一仿真时间轴编码。`--playback-speed`、实时显示跳帧、机器运行速度均不改变视频帧率和时间轴；等待开始和暂停时间不进入视频。20 秒仿真在 60 FPS 下输出每路 1200 帧；非整帧时长向上取整到一帧。`video_frames.jsonl` 保存每帧的视频时间与实际采样仿真时间，结束/中止日志的 `video` 字段记录文件、帧数、尺寸和编码状态。
+
+录制沿用轨迹叠加显示，`--no-path-overlay` 可关闭。多机位或高帧率会增加 RTX 渲染、编码和磁盘开销，仿真可能运行更慢，但不改变控制/物理步长。结束或 `Ctrl+C` 中断时会关闭编码器，保存已录片段；录制失败会明确报错并留下中止日志。未开启时不创建相机、视频文件，也不导入可选编码依赖；`--validate` 只检查录制配置，`--inspect` 不录制。
+
+当前已覆盖普通 Python 的配置、采样、拼屏、退出及渲染接口契约测试；真实 Isaac Sim/RTX 画面仍需在服务器短跑验证。
 
 ## 工作流
 

@@ -16,6 +16,8 @@ from .types import finite_array
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "arl_robot_1.yaml"
 HELIX_CONFIG = REPO_ROOT / "configs" / "arl_robot_1_helix.yaml"
+DEFAULT_RECORDING = {"enabled": False, "fps": 60, "width": 1280, "height": 720,
+                     "cameras": ["overview", "follow", "top"]}
 
 
 class ConfigurationError(ValueError):
@@ -93,13 +95,14 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
         except yaml.YAMLError as error:
             raise ConfigurationError(str(error)) from error
     validate_config(config)
+    config.setdefault("recording", deepcopy(DEFAULT_RECORDING))
     return deepcopy(config)
 
 
 def validate_config(config: dict) -> None:
     top = {"schema_version", "simulation", "vehicle", "control", "allocation", "effects", "power",
            "scene", "trajectory", "logging"}
-    _keys(config, top, top, "config")
+    _keys(config, top | {"recording"}, top, "config")
     if type(config["schema_version"]) is not int or config["schema_version"] != 1:
         raise ConfigurationError("Only schema_version: 1 is supported")
     _finite_tree(config)
@@ -120,6 +123,22 @@ def validate_config(config: dict) -> None:
         raise ConfigurationError("simulation.native_overrides must be a mapping")
     if {"dt", "gravity", "device", "render_interval", "use_newton_actuators"} & sim["native_overrides"].keys():
         raise ConfigurationError("native overrides cannot shadow timing/gravity/device or native actuator execution")
+    recording = config.get("recording", DEFAULT_RECORDING)
+    fields = {"enabled", "fps", "width", "height", "cameras"}
+    _keys(recording, fields, fields, "recording")
+    _boolean(recording["enabled"], "recording.enabled")
+    for field in ("fps", "width", "height"):
+        _integer(recording[field], f"recording.{field}", 1)
+    for field in ("width", "height"):
+        if recording[field] % 2:
+            raise ConfigurationError(f"recording.{field} must be even for H.264 video")
+    if recording["enabled"] and recording["fps"] > 1.0 / sim["dt"]:
+        raise ConfigurationError("recording.fps cannot exceed the simulation physics frequency (1 / simulation.dt)")
+    cameras = recording["cameras"]
+    if (not isinstance(cameras, list) or not cameras
+            or any(not isinstance(name, str) or name not in {"overview", "follow", "top"} for name in cameras)
+            or len(cameras) != len(set(cameras))):
+        raise ConfigurationError("recording.cameras must be a nonempty list of unique overview/follow/top names")
     vehicle = config["vehicle"]
     fields = {"name", "asset_path", "prim_path", "geometry_tolerance_m", "allocation_matrix", "rotor_directions",
               "rotor_direction_source", "thrusters", "initial_state", "launch", "native_overrides", "usd_overrides"}

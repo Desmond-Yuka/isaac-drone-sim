@@ -32,6 +32,8 @@ configs/arl_robot_1.yaml
 | `isaac_drone/runtime.py` | 控制降频、物理步调度、复位及异常状态处理 |
 | `isaac_drone/measurements.py` | 每步真实运动数据、完整角动量差分、位置误差及力/力矩阶段区分 |
 | `isaac_drone/telemetry.py` | 配置快照、资产层哈希、JSONL/CSV 运行日志与字段 schema |
+| `isaac_drone/recording.py`、`recording_views.py` | 可选多机位编码、仿真时间采样、同步拼屏与跟随取景 |
+| `isaac_drone/backends/video.py` | 独立 USD 相机与 RTX RGB 同步采集、资源清理 |
 | `scripts/standalone/run_arl.py` | 配置校验、真实物理属性检查、独立仿真入口 |
 
 ## 2. 已确认的资产事实与来源
@@ -74,6 +76,7 @@ OpenUSD 的 `diagonalInertia` 是主轴坐标中的惯量，`principalAxes` 是�
 主入口是 `configs/arl_robot_1.yaml`，每次实验可复制为独立文件并传 `--config`。未识别字段、重复 YAML key、NaN/Inf、错误单位形状、负时间常数都会报错。
 
 - `simulation`：物理步长、控制降频、渲染降频、重力、设备、随机种子、时长。
+- `recording`：默认关闭；帧率默认 60、每机位 1280×720，可选 `overview/follow/top` 的非空无重复列表。旧配置省略整段时补默认值；启用时帧率不超过物理频率，图像尺寸为正偶数。CLI 可单次覆盖开关、帧率、尺寸和机位。
 - `vehicle.thrusters`：上游全部动力学字段，保留推力上下限、推力系数范围、上升/下降时间常数、反扭矩系数、速率限制、积分方式、离散近似。
 - `vehicle.initial_state`：完整姿态、位置、速度、每个旋翼初始 rps。
 - `vehicle.launch`：地面高度、初始间隙及是否按真实碰撞体计算初始 root Z；启用时要求零初速度和零电机转速。计算包含 instance proxy 内的启用碰撞体，并重算形状 extent，避免当前资产的过期 authored extent 造成穿地。只在 reset 初始化时写入该位置。
@@ -167,7 +170,11 @@ python scripts/standalone/run_arl.py --visualizer none --duration 10
 
 WebRTC 串流用 `--livestream 1`（公网，`PUBLIC_IP` 指定服务器 IP）。Isaac Lab 3.0 把串流主机视为 headless，步进时不会调用 `app.update()`，所以串流时入口脚本在每个渲染步自行刷新 Kit 界面，并在刷新期间关闭 `playSimulations`，不额外推进物理。`--wait-for-start` 在场景加载后保持界面刷新、不推进物理，终端按回车后才开始任务。
 
-有画面（串流或本地窗口）时，`isaac_drone/playback.py` 按墙钟对齐仿真时间，默认 `--playback-speed 1` 即真实时间；`0` 关闭对齐。每个渲染步：仿真超前就等待；刷新界面比帧间隔慢、仿真落后超过 50 ms 时跳过该帧，让物理追上，但至少每 0.25 s 画一帧。结束事件 `finished.playback` 记录墙钟时长、实际倍速、已画/跳过帧数和平均刷新耗时；若物理和记录本身就慢于实时，这里会如实显示达不到的倍速。`isaac_drone/visualization.py` 在 `/World/Visuals` 下创建纯显示用的 USD 几何（不带任何物理/碰撞 API）：绿色虚线为参考质心轨迹，红色实线为实际质心轨迹（每移动 5 mm 记一点，在渲染帧写入），绿色小球为当前时刻的参考点；`--no-path-overlay` 关闭。无画面运行不创建这些几何，也不做墙钟对齐。
+有画面（串流或本地窗口）时，`isaac_drone/playback.py` 按墙钟对齐仿真时间，默认 `--playback-speed 1` 即真实时间；`0` 关闭对齐。每个渲染步：仿真超前就等待；刷新界面比帧间隔慢、仿真落后超过 50 ms 时跳过该帧，让物理追上，但至少每 0.25 s 画一帧。结束事件 `finished.playback` 记录墙钟时长、实际倍速、已画/跳过帧数和平均刷新耗时；若物理和记录本身就慢于实时，这里会如实显示达不到的倍速。`isaac_drone/visualization.py` 在 `/World/Visuals` 下创建纯显示用的 USD 几何（不带任何物理/碰撞 API）：绿色虚线为参考质心轨迹，红色实线为实际质心轨迹（每移动 5 mm 记一点，在渲染帧写入），绿色小球为当前时刻的参考点；`--no-path-overlay` 关闭。无画面且不录制时不创建这些几何，也不做墙钟对齐；离屏录制时也可保留轨迹叠加。
+
+视频录制位于独立入口的展示/输出层，不接入 `MotionControlLoop` 或动力学后端。`--record-video` 在 AppLauncher 启动前检查可选 `imageio-ffmpeg` 及编码器，并启用 `enable_cameras`（不启动 Isaac Lab 自带的 gym 录像链路）。`IsaacCameraRig` 为选定机位创建独立相机和 render product；全景按参考路径取景，跟随/俯视按每步实际质心定位。每次采集统一更新相机，调用 `sim.forward()` 同步 Fabric，再临时关闭 `playSimulations` 刷新一次 Kit，读取所有 RGB；不调用物理 step。非采集时暂停这些 render product，退出释放自身资源。
+
+`MultiViewRecorder` 以整数帧索引计算 `index/fps` 采样时刻，与 `render_interval`、墙钟显示节流分离。初始化相机/等待输入不编码；从任务 t=0 起采样，在到达采样时刻的物理步取图，终点处仅补齐早于终点的采样时刻。每次图像同时送入独立 MP4 与 `combined.mp4`，同步拼屏不经过事后时间匹配。编码器采用流式 FFmpeg/H.264（[imageio-ffmpeg 提供可执行文件](https://github.com/imageio/imageio-ffmpeg)），不会将整个实验的原始帧堆积在内存中。`video_frames.jsonl` 记录编码帧索引/视频时间/实际仿真采样时间；结束/中止事件记录各文件帧数及编码状态。`ExitStack` 在正常完成、仿真停止及异常（含 Ctrl+C）时关闭全部采集和编码资源。用法见 [README 的录制章节](../README.md#可选多机位视频录制)。
 
 也可以直接使用服务器现有 Isaac Lab Python 环境运行同一个脚本。代码不会自动下载 29GB 运行环境，也不会切换到另一个机型。`--inspect` 会加载 PhysX 实际属性并打印分配矩阵/质量/惯量/采样参数，然后退出，不执行飞行控制。
 

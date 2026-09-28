@@ -13,6 +13,7 @@ dependencies = ["numpy>=1.21", "PyYAML>=6.0"]
 test = ["pytest>=7"]
 plot = ["matplotlib>=3.5"]
 usd = ["usd-core>=25.0"]
+video = ["imageio-ffmpeg>=0.6"]
 
 [tool.setuptools.packages.find]
 include = ["isaac_drone*"]

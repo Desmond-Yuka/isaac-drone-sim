@@ -174,3 +174,10 @@ logging:
   directory: runs
   every_n_steps: 1             # 默认每个物理步记录：200 Hz，包含完整基础运动数据
   flush_every_n_records: 100
+
+recording:
+  enabled: false               # 按需开启仿真视频录制，默认不录制
+  fps: 60                      # 不高于物理步频；无需整除物理步频
+  width: 1280                  # H.264 视频宽高必须为正偶数
+  height: 720
+  cameras: [overview, follow, top]  # 全景、动态跟随、俯视；可按需选择其中的机位
