@@ -1,4 +1,5 @@
 """Run metrics, multi-run comparison and synthetic parameter sweeps on short real runs."""
+
 import json
 
 import pytest
@@ -41,7 +42,7 @@ def test_ground_launch_metrics_split_spin_up_from_the_trajectory(tmp_path):
 
 def test_compare_writes_table_csv_and_rejects_unknown_phase(tmp_path):
     first = fly(tmp_path / "a").run_dir
-    second = fly(tmp_path / "b", 'controller.position_kp=[2.0, 2.0, 2.0]').run_dir
+    second = fly(tmp_path / "b", "controller.position_kp=[2.0, 2.0, 2.0]").run_dir
     report = compare_runs([first, second], tmp_path / "out", labels=["base", "soft"], figures=False)
     assert [row["label"] for row in report["rows"]] == ["base", "soft"]
     assert "| base |" in report["table"] and (tmp_path / "out" / "comparison.csv").is_file()
@@ -70,15 +71,25 @@ def test_grid_parsing_and_cartesian_product():
 
 def test_sweep_validates_every_point_before_flying(tmp_path):
     with pytest.raises(ConfigurationError):
-        run_sweep(load_config.__defaults__[0], parse_grid(["controller.position_kp=[[1,1,1],[1,1]]"]),
-                  output_dir=tmp_path / "bad", log=lambda *_: None)
+        run_sweep(
+            load_config.__defaults__[0],
+            parse_grid(["controller.position_kp=[[1,1,1],[1,1]]"]),
+            output_dir=tmp_path / "bad",
+            log=lambda *_: None,
+        )
     assert not (tmp_path / "bad").exists()
 
 
 def test_sweep_runs_points_in_workers_and_ranks_them(tmp_path):
     grid = parse_grid(["controller.position_kp=[[1.0,1.0,1.0],[4.0,4.0,2.5]]"])
-    report = run_sweep(load_config.__defaults__[0], grid, base_overrides=["simulation.duration_s=0.3"],
-                       output_dir=tmp_path / "sweep", workers=2, log=lambda *_: None)
+    report = run_sweep(
+        load_config.__defaults__[0],
+        grid,
+        base_overrides=["simulation.duration_s=0.3"],
+        output_dir=tmp_path / "sweep",
+        workers=2,
+        log=lambda *_: None,
+    )
     rows = report["rows"]
     assert len(rows) == 2 and all(row["error"] is None and row["success"] for row in rows)
     assert rows[0]["position_error_rms_m"] <= rows[1]["position_error_rms_m"]

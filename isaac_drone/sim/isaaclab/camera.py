@@ -4,6 +4,7 @@ Importing this module does not import Kit or Replicator. Construct the rig only
 after AppLauncher(enable_cameras=True) and simulation reset. The cameras have
 their own render products, so neither a viewport nor WebRTC is required.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -97,11 +98,15 @@ class IsaacCameraRig:
                 raise ValueError(f"Camera {name!r} needs distinct eye/target and a nonparallel up vector")
             # USD cameras look along local -Z with +Y up. Invert the Gf view
             # matrix to author the camera's world transform directly.
-            transforms[name] = self._Gf.Matrix4d().SetLookAt(
-                self._Gf.Vec3d(*map(float, eye)),
-                self._Gf.Vec3d(*map(float, target)),
-                self._Gf.Vec3d(*map(float, up)),
-            ).GetInverse()
+            transforms[name] = (
+                self._Gf.Matrix4d()
+                .SetLookAt(
+                    self._Gf.Vec3d(*map(float, eye)),
+                    self._Gf.Vec3d(*map(float, target)),
+                    self._Gf.Vec3d(*map(float, up)),
+                )
+                .GetInverse()
+            )
         for name, transform in transforms.items():
             self._cameras[name].Set(transform)
 
@@ -137,7 +142,8 @@ class IsaacCameraRig:
                     frames[name] = None
                     continue
                 if array.dtype != np.uint8 or array.size not in (
-                    self.height * self.width * 3, self.height * self.width * 4,
+                    self.height * self.width * 3,
+                    self.height * self.width * 4,
                 ):
                     raise RuntimeError(f"Camera {name!r} returned an invalid RGB frame: {array.shape}, {array.dtype}")
                 if array.ndim == 1:

@@ -7,6 +7,7 @@ subsampled every ``<name>_stride`` physics steps (row k = state after step
 stride*(k+1)). Refactors must reproduce them to round-off; a deliberate change
 of flight behaviour must regenerate the file and say so in its commit.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -37,9 +38,13 @@ def fly(name, steps):
         basic = record["basic"]
         errors.append(basic["position_error_norm_m"])
         if (index + 1) % stride == 0:
-            for key, value in (("pos", basic["position_w_m"]), ("quat", basic["quaternion_wxyz"]),
-                               ("rps", basic["motor_speed_rps"]), ("wrench", record["requested_wrench_b"]),
-                               ("target", basic["target_position_w_m"])):
+            for key, value in (
+                ("pos", basic["position_w_m"]),
+                ("quat", basic["quaternion_wxyz"]),
+                ("rps", basic["motor_speed_rps"]),
+                ("wrench", record["requested_wrench_b"]),
+                ("target", basic["target_position_w_m"]),
+            ):
                 rows[key].append(value)
     return {key: np.asarray(value) for key, value in rows.items()}, np.asarray(errors), record
 

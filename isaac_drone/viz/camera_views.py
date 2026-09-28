@@ -1,4 +1,5 @@
 """Camera framing without simulator dependencies or changes to vehicle state."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -23,20 +24,21 @@ class RecordingViews:
         if points.ndim != 2 or points.shape[1] != 3 or not len(points) or not np.isfinite(points).all():
             raise ValueError("reference_points must be finite (N, 3) positions")
         center = (points.min(axis=0) + points.max(axis=0)) / 2
-        radius = max(1.0, float(np.linalg.norm(points-center, axis=1).max()) + 0.6)
+        radius = max(1.0, float(np.linalg.norm(points - center, axis=1).max()) + 0.6)
         half_fov = np.arctan(0.75 * min(1.0, height / width))
         direction = np.array([1.0, -1.0, 0.7])
         distance = 1.1 * radius / np.sin(half_fov)
-        self._overview = {"eye": center + distance * direction / np.linalg.norm(direction),
-                          "target": center, "up": np.array([0.0, 0.0, 1.0])}
+        self._overview = {
+            "eye": center + distance * direction / np.linalg.norm(direction),
+            "target": center,
+            "up": np.array([0.0, 0.0, 1.0]),
+        }
 
     def poses(self, position_w):
         position = finite_array(position_w, (3,), "recording camera target")
         views = {
             "overview": self._overview,
-            "follow": {"eye": position + [2.5, -3.5, 1.8], "target": position,
-                       "up": np.array([0.0, 0.0, 1.0])},
-            "top": {"eye": position + [0.0, 0.0, 6.0], "target": position,
-                    "up": np.array([0.0, 1.0, 0.0])},
+            "follow": {"eye": position + [2.5, -3.5, 1.8], "target": position, "up": np.array([0.0, 0.0, 1.0])},
+            "top": {"eye": position + [0.0, 0.0, 6.0], "target": position, "up": np.array([0.0, 1.0, 0.0])},
         }
         return {name: {key: value.copy() for key, value in views[name].items()} for name in self.names}

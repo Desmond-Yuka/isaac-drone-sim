@@ -4,6 +4,7 @@ The overlays are purely visual USD geometry. No physics, collision or mass API
 is applied, so they cannot interact with the simulated vehicle. The NumPy
 helpers import without Isaac Sim; USD code imports pxr only when used.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -26,7 +27,7 @@ def resample_by_arc_length(points, spacing_m: float) -> np.ndarray:
     if len(points) < 2:
         return points
     arc = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))]
-    grid = np.linspace(0.0, arc[-1], max(2, int(np.ceil(arc[-1]/spacing_m))+1))
+    grid = np.linspace(0.0, arc[-1], max(2, int(np.ceil(arc[-1] / spacing_m)) + 1))
     return np.column_stack([np.interp(grid, arc, points[:, axis]) for axis in range(3)])
 
 
@@ -35,8 +36,8 @@ def dash_segments(points, dash_m: float, gap_m: float, spacing_m: float = 0.005)
     if not all(np.isfinite(value) and value > 0 for value in (dash_m, gap_m)):
         raise ValueError("dash and gap lengths must be positive")
     even = resample_by_arc_length(points, spacing_m)
-    dash, gap = max(1, round(dash_m/spacing_m)), max(1, round(gap_m/spacing_m))
-    segments = [even[index:index+dash+1] for index in range(0, len(even)-1, dash+gap)]
+    dash, gap = max(1, round(dash_m / spacing_m)), max(1, round(gap_m / spacing_m))
+    segments = [even[index : index + dash + 1] for index in range(0, len(even) - 1, dash + gap)]
     return [segment for segment in segments if len(segment) >= 2]
 
 
@@ -52,7 +53,7 @@ class PathTrail:
 
     def add(self, position_w) -> bool:
         position = finite_array(position_w, (3,), "trail position")
-        if self._count and np.linalg.norm(position-self._buffer[self._count-1]) < self.min_spacing_m:
+        if self._count and np.linalg.norm(position - self._buffer[self._count - 1]) < self.min_spacing_m:
             return False
         if self._count == len(self._buffer):
             self._buffer = np.concatenate([self._buffer, np.empty_like(self._buffer)])
@@ -62,7 +63,7 @@ class PathTrail:
 
     @property
     def points(self) -> np.ndarray:
-        return self._buffer[:self._count].copy()
+        return self._buffer[: self._count].copy()
 
 
 class PathOverlay:
@@ -72,9 +73,17 @@ class PathOverlay:
     error is smaller than the line width.
     """
 
-    def __init__(self, stage, root_path: str = "/World/Visuals", *, target_color=TARGET_COLOR,
-                 flown_color=FLOWN_COLOR, target_width_m=0.02, flown_width_m=0.012,
-                 setpoint_radius_m=0.035):
+    def __init__(
+        self,
+        stage,
+        root_path: str = "/World/Visuals",
+        *,
+        target_color=TARGET_COLOR,
+        flown_color=FLOWN_COLOR,
+        target_width_m=0.02,
+        flown_width_m=0.012,
+        setpoint_radius_m=0.035,
+    ):
         from pxr import UsdGeom
 
         self._stage = stage
@@ -87,7 +96,7 @@ class PathOverlay:
         sphere = UsdGeom.Sphere.Define(stage, f"{root_path}/Setpoint")
         sphere.CreateRadiusAttr(float(setpoint_radius_m))
         radius = float(setpoint_radius_m)
-        sphere.CreateExtentAttr([(-radius,)*3, (radius,)*3])
+        sphere.CreateExtentAttr([(-radius,) * 3, (radius,) * 3])
         sphere.CreateDisplayColorPrimvar().Set([tuple(map(float, target_color))])
         self._bind(sphere.GetPrim(), target_material)
         self._setpoint = sphere.AddTranslateOp()
@@ -100,7 +109,7 @@ class PathOverlay:
         shader.CreateIdAttr("UsdPreviewSurface")
         rgb = Gf.Vec3f(*map(float, color))
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(rgb)
-        shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(rgb*0.5)
+        shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(rgb * 0.5)
         shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.6)
         material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
         return material
@@ -122,7 +131,7 @@ class PathOverlay:
         curves.CreateDisplayColorPrimvar(UsdGeom.Tokens.constant).Set([tuple(map(float, color))])
         curves.CreateCurveVertexCountsAttr([])
         curves.CreatePointsAttr([])
-        curves.CreateExtentAttr([(0.0,)*3, (0.0,)*3])
+        curves.CreateExtentAttr([(0.0,) * 3, (0.0,) * 3])
         self._bind(curves.GetPrim(), material)
         return curves
 
@@ -133,11 +142,11 @@ class PathOverlay:
         segments = [np.asarray(segment, dtype=np.float32) for segment in segments if len(segment) >= 2]
         if segments:
             points = np.concatenate(segments)
-            lower, upper = points.min(axis=0)-width/2, points.max(axis=0)+width/2
+            lower, upper = points.min(axis=0) - width / 2, points.max(axis=0) + width / 2
             extent = [tuple(map(float, lower)), tuple(map(float, upper))]
             curves.GetPointsAttr().Set(Vt.Vec3fArray.FromNumpy(points))
         else:
-            extent = [(0.0,)*3, (0.0,)*3]
+            extent = [(0.0,) * 3, (0.0,) * 3]
             curves.GetPointsAttr().Set([])
         curves.GetCurveVertexCountsAttr().Set([len(segment) for segment in segments])
         curves.GetExtentAttr().Set(extent)

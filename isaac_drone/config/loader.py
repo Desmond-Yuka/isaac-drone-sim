@@ -8,6 +8,7 @@
 * ``KEY.PATH=VALUE`` overrides parse VALUE as YAML (``[1, 2, 3]``, ``null``,
   ``true``, ``{kind: hold}``) and replace the addressed value.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -90,7 +91,7 @@ def apply_override(config: dict, assignment: str) -> None:
     target = config
     for index, part in enumerate(parts[:-1]):
         if not isinstance(target, dict) or part not in target:
-            raise ConfigurationError(f"Override {key!r}: {'.'.join(parts[:index + 1])} does not exist")
+            raise ConfigurationError(f"Override {key!r}: {'.'.join(parts[: index + 1])} does not exist")
         target = target[part]
     if not isinstance(target, dict):
         raise ConfigurationError(f"Override {key!r}: {'.'.join(parts[:-1])} is not a mapping")

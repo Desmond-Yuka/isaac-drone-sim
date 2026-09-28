@@ -6,6 +6,7 @@ are validated before any flight starts. Runs execute in parallel worker
 processes and are written under ``<sweep dir>/points/``; ``summary.csv``,
 ``summary.json`` and ``summary.md`` rank them by one metric.
 """
+
 from __future__ import annotations
 
 import csv
@@ -67,30 +68,46 @@ def _sort_key(rank):
     def key(row):
         value = row.get(rank)
         return (row.get("error") is not None, not row.get("success"), value is None, value if value is not None else 0)
+
     return key
 
 
-def run_sweep(config_path, grid, *, base_overrides=(), output_dir=None, workers=None, rank="position_error_rms_m",
-              figures=False, log=print, runs_root=None) -> dict:
+def run_sweep(
+    config_path,
+    grid,
+    *,
+    base_overrides=(),
+    output_dir=None,
+    workers=None,
+    rank="position_error_rms_m",
+    figures=False,
+    log=print,
+    runs_root=None,
+) -> dict:
     points = grid_points(grid)
     for point in points:  # fail before flying anything
         load_config(config_path, overrides=[*base_overrides, *_overrides(point)])
     if output_dir is None:
         from isaac_drone.runtime.runner import REPO_ROOT
+
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         output_dir = Path(runs_root or REPO_ROOT / "runs") / f"sweep_{stamp}"
     output = Path(output_dir)
     (output / "points").mkdir(parents=True, exist_ok=True)
     log(f"Sweep: {len(points)} runs of {config_path} -> {output}")
-    jobs = [(index, str(config_path), list(base_overrides), point, str(output / "points"), figures)
-            for index, point in enumerate(points)]
+    jobs = [
+        (index, str(config_path), list(base_overrides), point, str(output / "points"), figures)
+        for index, point in enumerate(points)
+    ]
     rows = []
     with ProcessPoolExecutor(max_workers=workers) as pool:
         for row in pool.map(_run_point, jobs):
             status = "error" if row["error"] else ("ok" if row.get("success") else "failed")
-            log(f"  [{row['index'] + 1}/{len(points)}] {status}: "
+            log(
+                f"  [{row['index'] + 1}/{len(points)}] {status}: "
                 + ", ".join(f"{key[6:]}={value}" for key, value in row.items() if key.startswith("param:"))
-                + ("" if row.get(rank) is None else f"  {rank}={row[rank]:.4g}"))
+                + ("" if row.get(rank) is None else f"  {rank}={row[rank]:.4g}")
+            )
             rows.append(row)
     rows.sort(key=_sort_key(rank))
     columns = list(dict.fromkeys(key for row in rows for key in row))
@@ -98,12 +115,28 @@ def run_sweep(config_path, grid, *, base_overrides=(), output_dir=None, workers=
         writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()
         writer.writerows(rows)
-    (output / "summary.json").write_text(json.dumps({"config": str(config_path), "base_overrides": list(base_overrides),
-                                                     "grid": [[key, values] for key, values in grid], "rank": rank,
-                                                     "rows": rows}, indent=2, allow_nan=False) + "\n",
-                                         encoding="utf-8")
-    shown = [key for key in columns if key.startswith("param:")] + ["success", rank, "position_error_max_m",
-                                                                     "completion_time_s", "error"]
+    (output / "summary.json").write_text(
+        json.dumps(
+            {
+                "config": str(config_path),
+                "base_overrides": list(base_overrides),
+                "grid": [[key, values] for key, values in grid],
+                "rank": rank,
+                "rows": rows,
+            },
+            indent=2,
+            allow_nan=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    shown = [key for key in columns if key.startswith("param:")] + [
+        "success",
+        rank,
+        "position_error_max_m",
+        "completion_time_s",
+        "error",
+    ]
     lines = ["| " + " | ".join(key.removeprefix("param:") for key in shown) + " |", "|" + "---|" * len(shown)]
     for row in rows:
         cells = []

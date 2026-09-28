@@ -1,4 +1,5 @@
 """Numeric validation shared by every module: reject rather than repair bad values."""
+
 from __future__ import annotations
 
 from numbers import Real
@@ -36,12 +37,14 @@ def finite_scalar(value: object, name: str) -> float:
 
 def numeric_array(value, shape: tuple[int, ...] | None, name: str) -> np.ndarray:
     """Like finite_array, but never coerce booleans or strings to numbers; ``shape=None`` accepts any."""
+
     def numeric(item):
         if isinstance(item, np.ndarray):
             return item.dtype.kind in "fiu"
         if isinstance(item, (list, tuple)):
             return all(numeric(child) for child in item)
         return isinstance(item, Real) and not isinstance(item, (bool, np.bool_))
+
     if not numeric(value):
         raise ValueError(f"{name} must contain real numbers, not booleans/strings")
     if shape is not None:

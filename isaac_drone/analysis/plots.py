@@ -7,6 +7,7 @@ then a row with the ideal-minus-actual error. matplotlib is optional and
 imported only when drawing. The object API (no pyplot) needs no GUI backend,
 so this also runs headless and inside the Isaac Sim process.
 """
+
 from __future__ import annotations
 
 import csv
@@ -97,49 +98,155 @@ def plot_run(run_dir, output_dir=None) -> list[Path]:
     run = Path(run_dir)
     data = load_basic_csv(run / "basic.csv")
     _add_attitude_angles(data)
-    config, metadata = (json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-                        for path in (run / "config.json", run / "metadata.json"))
+    config, metadata = (
+        json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        for path in (run / "config.json", run / "metadata.json")
+    )
     context = (data, data["sample_time_s"], run.name, phase_starts(config, metadata))
     output = run / "plots" if output_dir is None else Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     figures = (
         ("trajectory_3d.png", lambda: _trajectory(data, run.name)),
-        ("position.png", lambda: _tracking(
-            *context, "Position (world frame)", "m", 0.1, _AXES,
-            "position_w_{c}_m", "target_position_w_{c}_m", "position_error_w_{c}_m", norm="position_error_norm_m")),
-        ("velocity.png", lambda: _tracking(
-            *context, "Velocity (world frame)", "m/s", 0.1, _AXES,
-            "velocity_w_{c}_m_s", "target_velocity_w_{c}_m_s", "velocity_error_w_{c}_m_s",
-            norm="velocity_error_norm_m_s")),
-        ("acceleration.png", lambda: _tracking(
-            *context, "Acceleration (world frame)", "m/s²", 0.5, _AXES,
-            "acceleration_w_{c}_m_s2", "target_acceleration_w_{c}_m_s2", "acceleration_error_w_{c}_m_s2",
-            norm="acceleration_error_norm_m_s2", actual_label="Actual (velocity difference)",
-            extra=("PhysX solver", "acceleration_native_w_{c}_m_s2", _SOLVER))),
-        ("attitude.png", lambda: _tracking(
-            *context, "Attitude (Z-Y-X Euler angles)", "deg", 2.0, _RPY,
-            "attitude_{c}_rad", "target_attitude_{c}_rad", "attitude_error_{c}_rad",
-            norm="attitude_error_angle_rad", norm_label="rotation angle", euclidean=False, scale=_DEG)),
-        ("angular_velocity.png", lambda: _tracking(
-            *context, "Angular velocity (body frame)", "deg/s", 5.0, _AXES,
-            "angular_velocity_b_{c}_rad_s", "target_angular_velocity_b_{c}_rad_s",
-            "angular_velocity_error_b_{c}_rad_s", norm="angular_velocity_error_norm_rad_s", scale=_DEG)),
-        ("motor_speed.png", lambda: _tracking(
-            *context, "Motor speed (native motor state, not encoder data)", "rpm", 100.0, _ROTORS,
-            "motor_speed_{c}_rpm", "motor_speed_command_{c}_rpm", "motor_speed_error_{c}_rpm",
-            ideal_label="Command", labels=_ROTOR_LABELS, colors=_ROTOR_COLORS)),
-        ("rotor_thrust.png", lambda: _tracking(
-            *context, "Rotor thrust", "N", 0.5, _ROTORS,
-            "motor_thrust_applied_{c}_n", "motor_thrust_command_{c}_n", "motor_thrust_error_{c}_n",
-            ideal_label="Command", labels=_ROTOR_LABELS, colors=_ROTOR_COLORS)),
-        ("force.png", lambda: _tracking(
-            *context, "Force on vehicle (body frame)", "N", 0.5, _AXES,
-            "force_motor_b_{c}_n", "force_command_b_{c}_n", "force_error_b_{c}_n",
-            norm="force_error_norm_n", actual_label="Motor output", ideal_label="Command")),
-        ("torque.png", lambda: _tracking(
-            *context, "Torque about CoM (body frame)", "N·m", 0.02, _AXES,
-            "torque_motor_b_{c}_nm", "torque_command_b_{c}_nm", "torque_error_b_{c}_nm",
-            norm="torque_error_norm_nm", actual_label="Motor output", ideal_label="Command")),
+        (
+            "position.png",
+            lambda: _tracking(
+                *context,
+                "Position (world frame)",
+                "m",
+                0.1,
+                _AXES,
+                "position_w_{c}_m",
+                "target_position_w_{c}_m",
+                "position_error_w_{c}_m",
+                norm="position_error_norm_m",
+            ),
+        ),
+        (
+            "velocity.png",
+            lambda: _tracking(
+                *context,
+                "Velocity (world frame)",
+                "m/s",
+                0.1,
+                _AXES,
+                "velocity_w_{c}_m_s",
+                "target_velocity_w_{c}_m_s",
+                "velocity_error_w_{c}_m_s",
+                norm="velocity_error_norm_m_s",
+            ),
+        ),
+        (
+            "acceleration.png",
+            lambda: _tracking(
+                *context,
+                "Acceleration (world frame)",
+                "m/s²",
+                0.5,
+                _AXES,
+                "acceleration_w_{c}_m_s2",
+                "target_acceleration_w_{c}_m_s2",
+                "acceleration_error_w_{c}_m_s2",
+                norm="acceleration_error_norm_m_s2",
+                actual_label="Actual (velocity difference)",
+                extra=("PhysX solver", "acceleration_native_w_{c}_m_s2", _SOLVER),
+            ),
+        ),
+        (
+            "attitude.png",
+            lambda: _tracking(
+                *context,
+                "Attitude (Z-Y-X Euler angles)",
+                "deg",
+                2.0,
+                _RPY,
+                "attitude_{c}_rad",
+                "target_attitude_{c}_rad",
+                "attitude_error_{c}_rad",
+                norm="attitude_error_angle_rad",
+                norm_label="rotation angle",
+                euclidean=False,
+                scale=_DEG,
+            ),
+        ),
+        (
+            "angular_velocity.png",
+            lambda: _tracking(
+                *context,
+                "Angular velocity (body frame)",
+                "deg/s",
+                5.0,
+                _AXES,
+                "angular_velocity_b_{c}_rad_s",
+                "target_angular_velocity_b_{c}_rad_s",
+                "angular_velocity_error_b_{c}_rad_s",
+                norm="angular_velocity_error_norm_rad_s",
+                scale=_DEG,
+            ),
+        ),
+        (
+            "motor_speed.png",
+            lambda: _tracking(
+                *context,
+                "Motor speed (native motor state, not encoder data)",
+                "rpm",
+                100.0,
+                _ROTORS,
+                "motor_speed_{c}_rpm",
+                "motor_speed_command_{c}_rpm",
+                "motor_speed_error_{c}_rpm",
+                ideal_label="Command",
+                labels=_ROTOR_LABELS,
+                colors=_ROTOR_COLORS,
+            ),
+        ),
+        (
+            "rotor_thrust.png",
+            lambda: _tracking(
+                *context,
+                "Rotor thrust",
+                "N",
+                0.5,
+                _ROTORS,
+                "motor_thrust_applied_{c}_n",
+                "motor_thrust_command_{c}_n",
+                "motor_thrust_error_{c}_n",
+                ideal_label="Command",
+                labels=_ROTOR_LABELS,
+                colors=_ROTOR_COLORS,
+            ),
+        ),
+        (
+            "force.png",
+            lambda: _tracking(
+                *context,
+                "Force on vehicle (body frame)",
+                "N",
+                0.5,
+                _AXES,
+                "force_motor_b_{c}_n",
+                "force_command_b_{c}_n",
+                "force_error_b_{c}_n",
+                norm="force_error_norm_n",
+                actual_label="Motor output",
+                ideal_label="Command",
+            ),
+        ),
+        (
+            "torque.png",
+            lambda: _tracking(
+                *context,
+                "Torque about CoM (body frame)",
+                "N·m",
+                0.02,
+                _AXES,
+                "torque_motor_b_{c}_nm",
+                "torque_command_b_{c}_nm",
+                "torque_error_b_{c}_nm",
+                norm="torque_error_norm_nm",
+                actual_label="Motor output",
+                ideal_label="Command",
+            ),
+        ),
     )
     paths = []
     for name, draw in figures:
@@ -154,15 +261,15 @@ def _add_attitude_angles(data):
     if "attitude_roll_rad" in data or "quaternion_wxyz_w" not in data:
         return
     w, x, y, z = (data[f"quaternion_wxyz_{c}"] for c in "wxyz")
-    data["attitude_roll_rad"] = np.arctan2(2*(w*x + y*z), 1 - 2*(x*x + y*y))
-    data["attitude_pitch_rad"] = np.arcsin(np.clip(2*(w*y - x*z), -1.0, 1.0))
-    data["attitude_yaw_rad"] = np.arctan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
+    data["attitude_roll_rad"] = np.arctan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+    data["attitude_pitch_rad"] = np.arcsin(np.clip(2 * (w * y - x * z), -1.0, 1.0))
+    data["attitude_yaw_rad"] = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
 
 
 def _time_figure(rows, title, run_name):
     from matplotlib.figure import Figure
 
-    figure = Figure(figsize=(10, 1.2 + 1.8*rows), layout="constrained")
+    figure = Figure(figsize=(10, 1.2 + 1.8 * rows), layout="constrained")
     axes = figure.subplots(rows, 1, sharex=True, squeeze=False)[:, 0]
     figure.suptitle(f"{title}\n{run_name}", fontsize=11)
     axes[-1].set_xlabel("Time [s]")
@@ -188,9 +295,29 @@ def _display(column, scale, component):
     return column * scale
 
 
-def _tracking(data, t, run_name, phases, title, unit, min_span, components, actual, ideal, error, *,
-              norm=None, norm_label="|error|", euclidean=True, scale=1.0, labels=None, colors=_AXIS_COLORS,
-              actual_label="Actual", ideal_label="Target", extra=None):
+def _tracking(
+    data,
+    t,
+    run_name,
+    phases,
+    title,
+    unit,
+    min_span,
+    components,
+    actual,
+    ideal,
+    error,
+    *,
+    norm=None,
+    norm_label="|error|",
+    euclidean=True,
+    scale=1.0,
+    labels=None,
+    colors=_AXIS_COLORS,
+    actual_label="Actual",
+    ideal_label="Target",
+    extra=None,
+):
     """One row per component (actual and ideal), then one row of ideal-minus-actual errors."""
     figure, axes = _time_figure(len(components) + 1, title, run_name)
     errors = []
@@ -199,23 +326,34 @@ def _tracking(data, t, run_name, phases, title, unit, min_span, components, actu
         ideal_values = data.get(ideal.format(c=component))
         _plot(ax, t, _display(actual_values, scale, component), label=actual_label, **_ACTUAL)
         if extra is not None:
-            _plot(ax, t, _display(data.get(extra[1].format(c=component)), scale, component),
-                  label=extra[0], **extra[2])
+            _plot(ax, t, _display(data.get(extra[1].format(c=component)), scale, component), label=extra[0], **extra[2])
         _plot(ax, t, _display(ideal_values, scale, component), label=ideal_label, **_IDEAL)
         ax.set_ylabel(f"{label} [{unit}]")
         difference = data.get(error.format(c=component))
         if difference is None and actual_values is not None and ideal_values is not None:
             difference = ideal_values - actual_values  # runs recorded before error columns existed
         errors.append(difference)
-        _plot(axes[-1], t, None if difference is None else difference*scale,
-              label=label.split(" ")[0], color=color, linewidth=1.0)
+        _plot(
+            axes[-1],
+            t,
+            None if difference is None else difference * scale,
+            label=label.split(" ")[0],
+            color=color,
+            linewidth=1.0,
+        )
     magnitude = data.get(norm) if norm else None
     if magnitude is None and norm and euclidean and all(e is not None for e in errors):
         magnitude = np.sqrt(sum(e**2 for e in errors))
     if magnitude is not None and np.isfinite(magnitude).any():
         finite = magnitude[np.isfinite(magnitude)] * scale
-        _plot(axes[-1], t, magnitude*scale, color="black", linewidth=0.9,
-              label=f"{norm_label}  max {finite.max():.3g}, RMS {math.sqrt(np.mean(finite**2)):.3g} {unit}")
+        _plot(
+            axes[-1],
+            t,
+            magnitude * scale,
+            color="black",
+            linewidth=0.9,
+            label=f"{norm_label}  max {finite.max():.3g}, RMS {math.sqrt(np.mean(finite**2)):.3g} {unit}",
+        )
     axes[-1].set_ylabel(f"Error [{unit}]")
     _finish(axes, t, phases, min_span)
     return figure
@@ -228,7 +366,7 @@ def _finish(axes, t, phases, min_span):
         low, high = ax.get_ylim()
         if high - low < min_span:
             middle = (low + high) / 2
-            ax.set_ylim(middle - min_span/2, middle + min_span/2)
+            ax.set_ylim(middle - min_span / 2, middle + min_span / 2)
         for start, _ in phases:
             if 0 < start < end:
                 ax.axvline(start, color="0.5", linestyle=":", linewidth=0.8)
@@ -236,8 +374,16 @@ def _finish(axes, t, phases, min_span):
     bounds = [start for start, _ in phases] + [end]
     for (start, name), stop in zip(phases, bounds[1:]):
         if start < end:
-            axes[0].text((start + min(stop, end)) / 2, 1.01, name, transform=axes[0].get_xaxis_transform(),
-                         fontsize=8, color="0.35", ha="center", va="bottom")
+            axes[0].text(
+                (start + min(stop, end)) / 2,
+                1.01,
+                name,
+                transform=axes[0].get_xaxis_transform(),
+                fontsize=8,
+                color="0.35",
+                ha="center",
+                va="bottom",
+            )
     for ax in (axes[0], axes[-1]):
         if ax.get_legend_handles_labels()[0]:
             ax.legend(loc="best", fontsize=8, ncol=2 if ax is axes[-1] else 1)

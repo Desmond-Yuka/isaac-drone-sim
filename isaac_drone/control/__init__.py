@@ -8,6 +8,17 @@ from .base import CONTROLLERS, Controller, ControllerDiagnostics, FlightLimits, 
 from .cascaded_pid import CascadedPidController, CascadedPidGains
 from .geometric import GeometricController, GeometricGains
 
-__all__ = ["CONTROLLERS", "AllocationResult", "BoundedAllocator", "CascadedPidController", "CascadedPidGains",
-           "Controller", "ControllerDiagnostics", "FlightLimits", "GeometricController", "GeometricGains",
-           "VehicleModel", "build_controller"]
+__all__ = [
+    "CONTROLLERS",
+    "AllocationResult",
+    "BoundedAllocator",
+    "CascadedPidController",
+    "CascadedPidGains",
+    "Controller",
+    "ControllerDiagnostics",
+    "FlightLimits",
+    "GeometricController",
+    "GeometricGains",
+    "VehicleModel",
+    "build_controller",
+]

@@ -7,6 +7,7 @@ follows the helix tangent (after turning to it smoothly during takeoff); in
 ``fixed`` mode it keeps the initial heading plus ``yaw_offset_rad``.
 See docs/spiral_math.md for the derivation.
 """
+
 from __future__ import annotations
 
 import math
@@ -75,9 +76,11 @@ class HelixTrajectory(SegmentedTrajectory):
     """Segments ``takeoff`` (vertical line, yaw turns to the helix heading) and ``helix``."""
 
     def __init__(self, params: HelixParams):
-        super().__init__(thrust_utilization=params.thrust_utilization,
-                         rest_speed_tolerance_m_s=params.rest_speed_tolerance_m_s,
-                         rest_angular_speed_tolerance_rad_s=params.rest_angular_speed_tolerance_rad_s)
+        super().__init__(
+            thrust_utilization=params.thrust_utilization,
+            rest_speed_tolerance_m_s=params.rest_speed_tolerance_m_s,
+            rest_angular_speed_tolerance_rad_s=params.rest_angular_speed_tolerance_rad_s,
+        )
         self.params = params
         self.turn_angle_rad = 2.0 * math.pi * params.turns
 
@@ -85,10 +88,12 @@ class HelixTrajectory(SegmentedTrajectory):
         p = self.params
         phase = p.initial_phase_rad
         center = position_w[:2] - p.radius_m * np.array([math.cos(phase), math.sin(phase)])
-        takeoff_end = position_w + np.array([0., 0., p.takeoff_height_m])
+        takeoff_end = position_w + np.array([0.0, 0.0, p.takeoff_height_m])
         final_phase = phase + self.turn_angle_rad
-        endpoint = np.r_[center + p.radius_m * np.array([math.cos(final_phase), math.sin(final_phase)]),
-                         takeoff_end[2] + p.climb_height_m]
+        endpoint = np.r_[
+            center + p.radius_m * np.array([math.cos(final_phase), math.sin(final_phase)]),
+            takeoff_end[2] + p.climb_height_m,
+        ]
         if p.yaw_mode == "fixed":
             yaw_helix = yaw_rad + p.yaw_offset_rad
         else:
@@ -102,25 +107,45 @@ class HelixTrajectory(SegmentedTrajectory):
             raise ValueError("Helix positions or headings exceed finite numerical range")
         self._center_xy, self._takeoff_end = center, takeoff_end
         self._yaw_initial, self._yaw_helix = yaw_rad, yaw_helix
-        takeoff = Segment("takeoff", self._takeoff_setpoint, abs(p.takeoff_height_m), yaw_helix - yaw_rad,
-                          p.takeoff_duration_s, revolutions=0.0, hermite_samples=33)
-        helix = Segment("helix", self._helix_setpoint, math.hypot(p.radius_m * self.turn_angle_rad, p.climb_height_m),
-                        helix_yaw_change, p.helix_duration_s, revolutions=abs(p.turns), hermite_samples=65)
+        takeoff = Segment(
+            "takeoff",
+            self._takeoff_setpoint,
+            abs(p.takeoff_height_m),
+            yaw_helix - yaw_rad,
+            p.takeoff_duration_s,
+            revolutions=0.0,
+            hermite_samples=33,
+        )
+        helix = Segment(
+            "helix",
+            self._helix_setpoint,
+            math.hypot(p.radius_m * self.turn_angle_rad, p.climb_height_m),
+            helix_yaw_change,
+            p.helix_duration_s,
+            revolutions=abs(p.turns),
+            hermite_samples=65,
+        )
         return [takeoff, helix], endpoint, yaw_helix + helix_yaw_change
 
     def _takeoff_setpoint(self, progress) -> TrajectorySetpoint:
         """Vertical takeoff reference for progress [sigma, sigma', ..., sigma''''] in [0, 1]."""
         height = self.params.takeoff_height_m
         derivatives = np.zeros((4, 3))
-        position = self._start_position + np.array([0., 0., height * progress[0]])
+        position = self._start_position + np.array([0.0, 0.0, height * progress[0]])
         derivatives[:, 2] = float(height) * progress[1:]
         yaw_change = self._yaw_helix - self._yaw_initial
         yaw = self._yaw_initial + yaw_change * progress[0]
         yaw_rate, yaw_acceleration = yaw_change * progress[1:3]
-        return TrajectorySetpoint(position_w=position, velocity_w=derivatives[0], acceleration_w=derivatives[1],
-                                  yaw_rad=float(yaw), yaw_rate_rad_s=float(yaw_rate),
-                                  yaw_acceleration_rad_s2=float(yaw_acceleration),
-                                  jerk_w=derivatives[2], snap_w=derivatives[3])
+        return TrajectorySetpoint(
+            position_w=position,
+            velocity_w=derivatives[0],
+            acceleration_w=derivatives[1],
+            yaw_rad=float(yaw),
+            yaw_rate_rad_s=float(yaw_rate),
+            yaw_acceleration_rad_s2=float(yaw_acceleration),
+            jerk_w=derivatives[2],
+            snap_w=derivatives[3],
+        )
 
     def _helix_setpoint(self, progress) -> TrajectorySetpoint:
         """Helix reference for progress [sigma, sigma', ..., sigma''''] in [0, 1]."""
@@ -129,8 +154,8 @@ class HelixTrajectory(SegmentedTrajectory):
         yaw_rate = yaw_acceleration = 0.0
         phase = float(p.initial_phase_rad) + self.turn_angle_rad * progress[0]
         theta1, theta2, theta3, theta4 = self.turn_angle_rad * np.asarray(progress[1:])
-        radial = np.array([math.cos(phase), math.sin(phase), 0.])
-        tangent = np.array([-math.sin(phase), math.cos(phase), 0.])
+        radial = np.array([math.cos(phase), math.sin(phase), 0.0])
+        tangent = np.array([-math.sin(phase), math.cos(phase), 0.0])
         radius = float(p.radius_m)
         position = np.r_[self._center_xy, self._takeoff_end[2]] + radius * radial
         position[2] += float(p.climb_height_m) * progress[0]
@@ -139,17 +164,25 @@ class HelixTrajectory(SegmentedTrajectory):
         derivatives[0] = radius * theta1 * tangent
         derivatives[1] = radius * (theta2 * tangent - theta1**2 * radial)
         derivatives[2] = radius * ((theta3 - theta1**3) * tangent - 3.0 * theta1 * theta2 * radial)
-        derivatives[3] = radius * ((theta4 - 6.0 * theta1**2 * theta2) * tangent
-                                   + (theta1**4 - 3.0 * theta2**2 - 4.0 * theta1 * theta3) * radial)
+        derivatives[3] = radius * (
+            (theta4 - 6.0 * theta1**2 * theta2) * tangent
+            + (theta1**4 - 3.0 * theta2**2 - 4.0 * theta1 * theta3) * radial
+        )
         derivatives[:, 2] = float(p.climb_height_m) * np.asarray(progress[1:])
         yaw = self._yaw_helix
         if p.yaw_mode == "tangent":
             yaw += self.turn_angle_rad * progress[0]
             yaw_rate, yaw_acceleration = theta1, theta2
-        return TrajectorySetpoint(position_w=position, velocity_w=derivatives[0], acceleration_w=derivatives[1],
-                                  yaw_rad=float(yaw), yaw_rate_rad_s=float(yaw_rate),
-                                  yaw_acceleration_rad_s2=float(yaw_acceleration),
-                                  jerk_w=derivatives[2], snap_w=derivatives[3])
+        return TrajectorySetpoint(
+            position_w=position,
+            velocity_w=derivatives[0],
+            acceleration_w=derivatives[1],
+            yaw_rad=float(yaw),
+            yaw_rate_rad_s=float(yaw_rate),
+            yaw_acceleration_rad_s2=float(yaw_acceleration),
+            jerk_w=derivatives[2],
+            snap_w=derivatives[3],
+        )
 
 
 @TRAJECTORIES.register("helix", params=HelixParams)

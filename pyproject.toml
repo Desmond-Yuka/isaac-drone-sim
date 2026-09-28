@@ -37,7 +37,12 @@ ignore = [
     "SIM108",  # ternaries are not always clearer
     "RUF001", "RUF002", "RUF003",  # Chinese/Unicode punctuation and SI symbols in text
     "B905",    # zip() strictness is checked explicitly where lengths can differ
+    "RUF005",  # false positives on NumPy: array + [..] is element-wise addition, not concatenation
+    "SIM105",  # explicit try/except/pass reads fine in cleanup paths
 ]
+
+[tool.ruff.format]
+# `ruff format` is the project style (black-compatible, 120 columns).
 
 [tool.ruff.lint.isort]
 known-first-party = ["isaac_drone"]

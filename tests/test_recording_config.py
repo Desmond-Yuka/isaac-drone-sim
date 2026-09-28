@@ -1,14 +1,15 @@
 """Optional video recording stays strict without breaking existing YAML files."""
+
 from copy import deepcopy
 
 import pytest
 import yaml
 
 from isaac_drone.config import (
-    ConfigurationError,
     DEFAULT_CONFIG,
     DEFAULT_RECORDING,
     HELIX_CONFIG,
+    ConfigurationError,
     load_config,
     validate_config,
 )
@@ -40,30 +41,33 @@ def test_legacy_config_loads_with_independent_recording_defaults(tmp_path):
     assert DEFAULT_RECORDING["cameras"] == ["overview", "follow", "top"]
 
 
-@pytest.mark.parametrize("field,value", [
-    ("enabled", "false"),
-    ("enabled", 0),
-    ("enabled", None),
-    ("fps", True),
-    ("fps", 0),
-    ("fps", -1),
-    ("fps", 60.0),
-    ("fps", "60"),
-    ("width", False),
-    ("width", 0),
-    ("width", 1280.0),
-    ("width", 1279),
-    ("height", -2),
-    ("height", 720.0),
-    ("height", 719),
-    ("cameras", None),
-    ("cameras", "follow"),
-    ("cameras", []),
-    ("cameras", ["follow", "follow"]),
-    ("cameras", ["follow", "unknown"]),
-    ("cameras", [True]),
-    ("cameras", [["follow"]]),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("enabled", "false"),
+        ("enabled", 0),
+        ("enabled", None),
+        ("fps", True),
+        ("fps", 0),
+        ("fps", -1),
+        ("fps", 60.0),
+        ("fps", "60"),
+        ("width", False),
+        ("width", 0),
+        ("width", 1280.0),
+        ("width", 1279),
+        ("height", -2),
+        ("height", 720.0),
+        ("height", 719),
+        ("cameras", None),
+        ("cameras", "follow"),
+        ("cameras", []),
+        ("cameras", ["follow", "follow"]),
+        ("cameras", ["follow", "unknown"]),
+        ("cameras", [True]),
+        ("cameras", [["follow"]]),
+    ],
+)
 def test_invalid_recording_values_fail_even_when_disabled(field, value):
     cfg = load_config()
     cfg["recording"][field] = value
@@ -82,7 +86,7 @@ def test_explicit_recording_section_requires_complete_mapping(value):
 def test_unknown_recording_fields_fail():
     cfg = load_config()
     cfg["recording"]["enable"] = True
-    with pytest.raises(ConfigurationError, match="unknown=.*enable"):
+    with pytest.raises(ConfigurationError, match=r"unknown=.*enable"):
         validate_config(cfg)
 
 
@@ -98,7 +102,7 @@ def test_enabled_recording_rejects_rate_above_physics_frequency():
     cfg = load_config()
     cfg["simulation"]["dt"] = 0.005
     cfg["recording"].update(enabled=True, fps=201)
-    with pytest.raises(ConfigurationError, match="recording.fps.*physics frequency"):
+    with pytest.raises(ConfigurationError, match=r"recording\.fps.*physics frequency"):
         validate_config(cfg)
 
 

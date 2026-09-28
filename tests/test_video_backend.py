@@ -1,4 +1,5 @@
 """Offscreen capture lifecycle contracts; no claim of GPU/RTX verification."""
+
 import sys
 import types
 
@@ -7,14 +8,21 @@ import pytest
 
 from isaac_drone.sim.isaaclab.camera import IsaacCameraRig
 
-
 PLAY_SETTING = "/app/player/playSimulations"
 
 
 @pytest.fixture
 def kit(monkeypatch):
-    state = types.SimpleNamespace(updates=0, physics_steps=0, forwards=0, failure=False,
-                                  settings={PLAY_SETTING: True}, products=[], annotators=[], removed=[])
+    state = types.SimpleNamespace(
+        updates=0,
+        physics_steps=0,
+        forwards=0,
+        failure=False,
+        settings={PLAY_SETTING: True},
+        products=[],
+        annotators=[],
+        removed=[],
+    )
 
     def module(name, **attributes):
         value = types.ModuleType(name)
@@ -90,9 +98,11 @@ def kit(monkeypatch):
     def forward():
         state.forwards += 1
 
-    settings = types.SimpleNamespace(get=state.settings.get,
-                                     set_bool=state.settings.__setitem__,
-                                     destroy_item=lambda name: state.settings.pop(name, None))
+    settings = types.SimpleNamespace(
+        get=state.settings.get,
+        set_bool=state.settings.__setitem__,
+        destroy_item=lambda name: state.settings.pop(name, None),
+    )
     stage = types.SimpleNamespace(RemovePrim=state.removed.append)
     module("carb")
     module("carb.settings", get_settings=lambda: settings)
@@ -100,21 +110,29 @@ def kit(monkeypatch):
     module("omni.kit")
     module("omni.kit.app", get_app=lambda: types.SimpleNamespace(update=update, is_running=lambda: True))
     module("omni.replicator")
-    module("omni.replicator.core", create=types.SimpleNamespace(render_product=Product),
-           AnnotatorRegistry=types.SimpleNamespace(get_annotator=Annotator))
+    module(
+        "omni.replicator.core",
+        create=types.SimpleNamespace(render_product=Product),
+        AnnotatorRegistry=types.SimpleNamespace(get_annotator=Annotator),
+    )
     module("isaaclab")
     module("isaaclab.sim")
     module("isaaclab.sim.utils")
     module("isaaclab.sim.utils.stage", get_current_stage=lambda: stage)
-    module("pxr", Gf=types.SimpleNamespace(Matrix4d=Matrix, Vec3d=lambda *v: v, Vec2f=lambda *v: v),
-           UsdGeom=types.SimpleNamespace(Camera=Camera, Xform=Camera))
+    module(
+        "pxr",
+        Gf=types.SimpleNamespace(Matrix4d=Matrix, Vec3d=lambda *v: v, Vec2f=lambda *v: v),
+        UsdGeom=types.SimpleNamespace(Camera=Camera, Xform=Camera),
+    )
     state.sim = types.SimpleNamespace(forward=forward)
     return state
 
 
 def views():
-    return {"follow": {"eye": [2, -2, 2], "target": [0, 0, 0]},
-            "top": {"eye": [0, 0, 5], "target": [0, 0, 0], "up": [0, 1, 0]}}
+    return {
+        "follow": {"eye": [2, -2, 2], "target": [0, 0, 0]},
+        "top": {"eye": [0, 0, 5], "target": [0, 0, 0], "up": [0, 1, 0]},
+    }
 
 
 def test_all_views_capture_one_instant_without_stepping_and_own_their_buffers(kit):

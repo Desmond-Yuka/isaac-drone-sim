@@ -21,6 +21,7 @@ Add a trajectory by subclassing ``SegmentedTrajectory`` (implement
 
 then select it with ``trajectory: {kind: my_path, ...params}`` in YAML.
 """
+
 from __future__ import annotations
 
 import math
@@ -86,9 +87,13 @@ class SegmentedTrajectory:
     With nonzero rest tolerances, reset rejects a moving vehicle.
     """
 
-    def __init__(self, *, thrust_utilization: float | None = None,
-                 rest_speed_tolerance_m_s: float | None = None,
-                 rest_angular_speed_tolerance_rad_s: float | None = None):
+    def __init__(
+        self,
+        *,
+        thrust_utilization: float | None = None,
+        rest_speed_tolerance_m_s: float | None = None,
+        rest_angular_speed_tolerance_rad_s: float | None = None,
+    ):
         self.thrust_utilization = thrust_utilization
         self._rest_speed = rest_speed_tolerance_m_s
         self._rest_angular_speed = rest_angular_speed_tolerance_rad_s
@@ -110,8 +115,9 @@ class SegmentedTrajectory:
         if self._rest_speed is not None and np.linalg.norm(velocity) > self._rest_speed:
             raise ValueError("Trajectory reset requires settled CoM speed within rest_speed_tolerance_m_s")
         if self._rest_angular_speed is not None and np.linalg.norm(omega) > self._rest_angular_speed:
-            raise ValueError("Trajectory reset requires settled angular speed within "
-                             "rest_angular_speed_tolerance_rad_s")
+            raise ValueError(
+                "Trajectory reset requires settled angular speed within rest_angular_speed_tolerance_rad_s"
+            )
         rotation = quaternion_to_matrix(initial_state.quaternion_wxyz)
         if np.linalg.norm(rotation[:2, 0]) < 1e-10:
             raise ValueError("Initial body-X heading is undefined at a vertical body-X orientation")
@@ -128,8 +134,10 @@ class SegmentedTrajectory:
         self._origin, self._start_position, self._start_yaw = origin, position, yaw
         self._endpoint, self._end_yaw = np.asarray(endpoint, dtype=float), float(end_yaw)
         self._segments = segments
-        self._laws = {segment.name: None if segment.duration_s is None else HermiteTimeLaw(segment.duration_s)
-                      for segment in segments}
+        self._laws = {
+            segment.name: None if segment.duration_s is None else HermiteTimeLaw(segment.duration_s)
+            for segment in segments
+        }
         if not self.planned_phases:
             self._finalize_timing()
 
@@ -164,8 +172,10 @@ class SegmentedTrajectory:
     def _require_timing(self) -> None:
         self._require_geometry()
         if not self._timed:
-            raise RuntimeError(f"Plan the null-duration segments {list(self.planned_phases)} "
-                               "(minimum-time planner) after reset before sampling")
+            raise RuntimeError(
+                f"Plan the null-duration segments {list(self.planned_phases)} "
+                "(minimum-time planner) after reset before sampling"
+            )
 
     # -- geometry/timing queries ---------------------------------------------------------------
     @property
@@ -217,8 +227,10 @@ class SegmentedTrajectory:
         result = []
         for index, segment in enumerate(self._segments):
             start = self._boundaries[index]
-            result.extend((segment.name, name, start + begin, start + end)
-                          for name, begin, end in self._laws[segment.name].segments)
+            result.extend(
+                (segment.name, name, start + begin, start + end)
+                for name, begin, end in self._laws[segment.name].segments
+            )
         return result
 
     def timing_report(self) -> dict:
@@ -227,13 +239,19 @@ class SegmentedTrajectory:
         phases = {}
         for segment in self._segments:
             law = self._laws[segment.name]
-            phases[segment.name] = {**law.describe(), "planned": segment.duration_s is None,
-                                    "path_length_m": segment.length_m,
-                                    "peak_speed_m_s": segment.length_m * law.peak_rate}
-        return {"phase_boundaries_s": [start for start, _ in self.phase_boundaries_s],
-                "phase_names": [name for _, name in self.phase_boundaries_s],
-                "motion_duration_s": self.motion_duration_s, "thrust_utilization": self.thrust_utilization,
-                "phases": phases}
+            phases[segment.name] = {
+                **law.describe(),
+                "planned": segment.duration_s is None,
+                "path_length_m": segment.length_m,
+                "peak_speed_m_s": segment.length_m * law.peak_rate,
+            }
+        return {
+            "phase_boundaries_s": [start for start, _ in self.phase_boundaries_s],
+            "phase_names": [name for _, name in self.phase_boundaries_s],
+            "motion_duration_s": self.motion_duration_s,
+            "thrust_utilization": self.thrust_utilization,
+            "phases": phases,
+        }
 
     # -- sampling ------------------------------------------------------------------------------
     def _index(self, time_s: float) -> int:
@@ -254,9 +272,16 @@ class SegmentedTrajectory:
             segment = self._segments[index]
             return segment.setpoint(self._laws[segment.name].derivatives(time_s - self._boundaries[index]))
         zero = np.zeros(3)
-        return TrajectorySetpoint(position_w=self._endpoint.copy(), velocity_w=zero.copy(),
-                                  acceleration_w=zero.copy(), yaw_rad=self._end_yaw, yaw_rate_rad_s=0.0,
-                                  yaw_acceleration_rad_s2=0.0, jerk_w=zero.copy(), snap_w=zero.copy())
+        return TrajectorySetpoint(
+            position_w=self._endpoint.copy(),
+            velocity_w=zero.copy(),
+            acceleration_w=zero.copy(),
+            yaw_rad=self._end_yaw,
+            yaw_rate_rad_s=0.0,
+            yaw_acceleration_rad_s2=0.0,
+            jerk_w=zero.copy(),
+            snap_w=zero.copy(),
+        )
 
     def path_points(self, step_s: float = 0.005) -> np.ndarray:
         """Reference CoM positions from the start through the endpoint, sampled every ``step_s``."""

@@ -16,6 +16,7 @@ feedforward, which makes it a baseline for comparison, not a tracking optimum.
 Integrals do not grow while the thrust vector or the allocation is saturated.
 The attitude error has the SO(3) half-turn ambiguity; upright flight only.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -36,14 +37,14 @@ from .shaping import limited_thrust_vector
 class CascadedPidGains:
     """``controller: {kind: cascaded_pid}``; limits come from the shared ``limits:`` section."""
 
-    position_kp: Vec3                     # [1/s] position error -> velocity correction
-    velocity_kp: Vec3                     # [1/s] velocity error -> acceleration
-    velocity_ki: Vec3                     # [1/s^2]
-    velocity_integral_limit_m_s2: Vec3    # bound of the integral acceleration term per axis
-    attitude_kp: Vec3                     # [1/s] attitude error -> body-rate setpoint
-    rate_kp: Vec3                         # [1/s] body-rate error -> angular acceleration
-    rate_ki: Vec3                         # [1/s^2]
-    rate_integral_limit_rad_s2: Vec3      # bound of the integral angular-acceleration term per axis
+    position_kp: Vec3  # [1/s] position error -> velocity correction
+    velocity_kp: Vec3  # [1/s] velocity error -> acceleration
+    velocity_ki: Vec3  # [1/s^2]
+    velocity_integral_limit_m_s2: Vec3  # bound of the integral acceleration term per axis
+    attitude_kp: Vec3  # [1/s] attitude error -> body-rate setpoint
+    rate_kp: Vec3  # [1/s] body-rate error -> angular acceleration
+    rate_ki: Vec3  # [1/s^2]
+    rate_integral_limit_rad_s2: Vec3  # bound of the integral angular-acceleration term per axis
     max_velocity_correction_m_s: float | None = None
     max_body_rate_rad_s: Vec3 | None = None
 
@@ -69,8 +70,11 @@ class CascadedPidController:
         self.mass_kg = finite_scalar(vehicle.mass_properties.mass_kg, "mass_kg")
         self.inertia = finite_array(vehicle.mass_properties.inertia_com_b, (3, 3), "inertia_com_b")
         self.gravity_w = finite_array(vehicle.gravity_w, (3,), "gravity_w")
-        self._array = {name: None if value is None else np.asarray(value, dtype=float)
-                       for name, value in params_to_dict(gains).items() if isinstance(value, list) or value is None}
+        self._array = {
+            name: None if value is None else np.asarray(value, dtype=float)
+            for name, value in params_to_dict(gains).items()
+            if isinstance(value, list) or value is None
+        }
         self.reset()
 
     def reset(self) -> None:
@@ -102,16 +106,20 @@ class CascadedPidController:
         velocity_setpoint = setpoint.velocity_w + correction
         velocity_error = velocity_setpoint - state.linear_velocity_w
         acceleration = setpoint.acceleration_w + g["velocity_kp"] * velocity_error + self._velocity_integral
-        force, limited = limited_thrust_vector(acceleration, self.mass_kg, self.gravity_w, self.limits.max_tilt_rad,
-                                               self.limits.max_acceleration_m_s2)
-        self._velocity_integral = self._integrate(self._velocity_integral, velocity_error, g["velocity_ki"],
-                                                  g["velocity_integral_limit_m_s2"], dt, limited)
+        force, limited = limited_thrust_vector(
+            acceleration, self.mass_kg, self.gravity_w, self.limits.max_tilt_rad, self.limits.max_acceleration_m_s2
+        )
+        self._velocity_integral = self._integrate(
+            self._velocity_integral, velocity_error, g["velocity_ki"], g["velocity_integral_limit_m_s2"], dt, limited
+        )
 
-        yaw_rate = float(np.clip(setpoint.yaw_rate_rad_s, -self.limits.max_yaw_rate_rad_s,
-                                 self.limits.max_yaw_rate_rad_s))
+        yaw_rate = float(
+            np.clip(setpoint.yaw_rate_rad_s, -self.limits.max_yaw_rate_rad_s, self.limits.max_yaw_rate_rad_s)
+        )
         fallback = rotation if self._desired_rotation is None else self._desired_rotation
-        desired, desired_rate_d, _ = desired_attitude_kinematics(force, np.zeros(3), np.zeros(3), setpoint.yaw_rad,
-                                                                 yaw_rate, 0.0, fallback)
+        desired, desired_rate_d, _ = desired_attitude_kinematics(
+            force, np.zeros(3), np.zeros(3), setpoint.yaw_rad, yaw_rate, 0.0, fallback
+        )
         relative = rotation.T @ desired
         attitude_error = 0.5 * vee(relative.T - relative)
         rate_setpoint = -g["attitude_kp"] * attitude_error + relative @ desired_rate_d
@@ -120,15 +128,19 @@ class CascadedPidController:
         omega = state.angular_velocity_b
         rate_error = rate_setpoint - omega
         angular_acceleration = g["rate_kp"] * rate_error + self._rate_integral
-        self._rate_integral = self._integrate(self._rate_integral, rate_error, g["rate_ki"],
-                                              g["rate_integral_limit_rad_s2"], dt, False)
+        self._rate_integral = self._integrate(
+            self._rate_integral, rate_error, g["rate_ki"], g["rate_integral_limit_rad_s2"], dt, False
+        )
         torque = self.inertia @ angular_acceleration + np.cross(omega, self.inertia @ omega)
         thrust = max(0.0, float(force @ rotation[:, 2]))
 
         self._desired_rotation = desired
         self._desired_rate_d = relative.T @ rate_setpoint  # rate setpoint expressed in desired axes
-        self._details = {"velocity_setpoint_w_m_s": velocity_setpoint.tolist(),
-                         "rate_setpoint_b_rad_s": rate_setpoint.tolist(), "thrust_vector_limited": bool(limited)}
+        self._details = {
+            "velocity_setpoint_w_m_s": velocity_setpoint.tolist(),
+            "rate_setpoint_b_rad_s": rate_setpoint.tolist(),
+            "thrust_vector_limited": bool(limited),
+        }
         return Wrench(np.array([0.0, 0.0, thrust]), torque)
 
     def notify_allocation(self, result: AllocationResult) -> None:
@@ -140,8 +152,9 @@ class CascadedPidController:
 
     def diagnostics(self) -> ControllerDiagnostics:
         rotation = None if self._desired_rotation is None else self._desired_rotation.copy()
-        return ControllerDiagnostics(rotation, None if rotation is None else self._desired_rate_d.copy(),
-                                     dict(self._details))
+        return ControllerDiagnostics(
+            rotation, None if rotation is None else self._desired_rate_d.copy(), dict(self._details)
+        )
 
 
 @CONTROLLERS.register("cascaded_pid", params=CascadedPidGains)

@@ -6,10 +6,12 @@ Ornstein--Uhlenbeck process, not a CFD model. Stateful fields are evaluated once
 per physics step by EffectsPipeline; the same sampled field is used at every
 aerodynamic point during that step.
 """
+
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import Protocol
 
 import numpy as np
 
@@ -34,8 +36,9 @@ class Gust:
         if self.start_time_s < 0:
             raise ValueError("gust start_time_s must be finite and nonnegative")
         positive_dt(self.duration_s)
-        object.__setattr__(self, "delta_velocity_w_m_s", finite_array(
-            self.delta_velocity_w_m_s, (3,), "gust delta_velocity_w_m_s"))
+        object.__setattr__(
+            self, "delta_velocity_w_m_s", finite_array(self.delta_velocity_w_m_s, (3,), "gust delta_velocity_w_m_s")
+        )
 
     def velocity_w(self, time_s: float) -> np.ndarray:
         phase = (time_s - self.start_time_s) / self.duration_s
@@ -52,16 +55,30 @@ class UniformGustWind:
     process at the first step; this is a specified initialization, not a draw
     from its stationary distribution. No turbulence is generated when disabled.
     """
-    def __init__(self, velocity_w_m_s, *, gusts: Sequence[Gust] = (),
-                 spatial_gradient_per_s=None, reference_position_w_m=None,
-                 turbulence_time_constant_s=None, turbulence_std_w_m_s=None):
+
+    def __init__(
+        self,
+        velocity_w_m_s,
+        *,
+        gusts: Sequence[Gust] = (),
+        spatial_gradient_per_s=None,
+        reference_position_w_m=None,
+        turbulence_time_constant_s=None,
+        turbulence_std_w_m_s=None,
+    ):
         self.mean_w = finite_array(velocity_w_m_s, (3,), "velocity_w_m_s")
         if (spatial_gradient_per_s is None) != (reference_position_w_m is None):
             raise ValueError("wind gradient and reference position must be supplied together")
-        self.gradient = None if spatial_gradient_per_s is None else finite_array(
-            spatial_gradient_per_s, (3, 3), "spatial_gradient_per_s")
-        self.reference_w = None if reference_position_w_m is None else finite_array(
-            reference_position_w_m, (3,), "reference_position_w_m")
+        self.gradient = (
+            None
+            if spatial_gradient_per_s is None
+            else finite_array(spatial_gradient_per_s, (3, 3), "spatial_gradient_per_s")
+        )
+        self.reference_w = (
+            None
+            if reference_position_w_m is None
+            else finite_array(reference_position_w_m, (3,), "reference_position_w_m")
+        )
         self.gusts = tuple(gusts)
         if not all(isinstance(gust, Gust) for gust in self.gusts):
             raise TypeError("gusts must contain Gust instances")

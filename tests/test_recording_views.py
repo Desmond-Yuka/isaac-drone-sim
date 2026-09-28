@@ -1,4 +1,5 @@
 """Framing and actual-state tracking, independent of rendering/physics."""
+
 import numpy as np
 import pytest
 
@@ -16,7 +17,7 @@ def test_tracking_cameras_follow_actual_position_and_overview_stays_fixed():
         np.testing.assert_array_equal(after["overview"][field], before["overview"][field])
     # A valid top-down look-at basis must not have collinear direction/up.
     top = after["top"]
-    assert np.linalg.norm(np.cross(top["target"]-top["eye"], top["up"])) > 0
+    assert np.linalg.norm(np.cross(top["target"] - top["eye"], top["up"])) > 0
 
 
 @pytest.mark.parametrize("width,height", [(1280, 720), (720, 1280)])

@@ -5,6 +5,7 @@ timing or telemetry, so a run records identical data with or without them.
 Simulator-specific objects (overlay prims, camera rigs, draw callbacks) are
 injected, keeping this module importable without Isaac Sim.
 """
+
 from __future__ import annotations
 
 from isaac_drone.runtime.runner import RunHook
@@ -44,8 +45,9 @@ class VideoHook(RunHook):
 
     name = "video"
 
-    def __init__(self, recording_config: dict, reference_points, start_position_w, rig_factory, *,
-                 before_capture=None, log=print):
+    def __init__(
+        self, recording_config: dict, reference_points, start_position_w, rig_factory, *, before_capture=None, log=print
+    ):
         self.config = recording_config
         self.reference_points = reference_points
         self.start_position_w = start_position_w
@@ -64,8 +66,9 @@ class VideoHook(RunHook):
         self.video = MultiViewRecorder(run.run_dir, config)
         self.views = RecordingViews(config["cameras"], self.reference_points, config["width"], config["height"])
         self.rig = self.rig_factory(config["width"], config["height"], self.views.poses(self.start_position_w))
-        self.video.capture(run.loop.time_s, self.rig.read(self.views.poses(self.start_position_w)),
-                           end_time_s=run.end_time_s)
+        self.video.capture(
+            run.loop.time_s, self.rig.read(self.views.poses(self.start_position_w)), end_time_s=run.end_time_s
+        )
         self.log(f"Video recording: {', '.join(config['cameras'])} + combined at {config['fps']} FPS -> {run.run_dir}")
 
     def after_step(self, run, record):
@@ -129,6 +132,7 @@ class FiguresHook(RunHook):
     def finalize(self, result):
         try:
             from isaac_drone.analysis.plots import plot_run
+
             figures = plot_run(result.run_dir)
             self.log(f"Plots: {figures[0].parent} ({len(figures)} PNG)")
         except Exception as error:  # figures are a convenience and never change the run result
@@ -144,6 +148,7 @@ class MetricsHook(RunHook):
     def finalize(self, result):
         try:
             from isaac_drone.analysis.metrics import write_metrics
+
             write_metrics(result.run_dir)
         except Exception as error:  # metrics are derived data and never change the run result
             self.log(f"Metrics not written ({error}); retry: python -m isaac_drone summarize {result.run_dir}")

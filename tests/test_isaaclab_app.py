@@ -1,4 +1,5 @@
 """Isaac app composition (runner + overlay/video/display hooks) with fake physics and RGB I/O."""
+
 import builtins
 import copy
 import json
@@ -19,9 +20,18 @@ from isaac_drone.config import DEFAULT_RECORDING, load_config
 
 @pytest.fixture
 def runtime(monkeypatch, tmp_path):
-    state = types.SimpleNamespace(physics_steps=0, rendered=0, rig_reads=[], rigs=[],
-                                  writers=[], recorders=[], pacer_frames=0, lifecycle=[],
-                                  displayed=False, interrupt=None)
+    state = types.SimpleNamespace(
+        physics_steps=0,
+        rendered=0,
+        rig_reads=[],
+        rigs=[],
+        writers=[],
+        recorders=[],
+        pacer_frames=0,
+        lifecycle=[],
+        displayed=False,
+        interrupt=None,
+    )
 
     def actual_position(step):
         return np.array([step * 0.01, step * -0.02, 2.0 + step * 0.03])
@@ -53,7 +63,8 @@ def runtime(monkeypatch, tmp_path):
             self.dt_s = config["simulation"]["dt"]
             # Deliberately far from truth: camera tracking must not use this.
             self.trajectory = types.SimpleNamespace(
-                sample=lambda time: types.SimpleNamespace(position_w=np.array([100.0, 100.0, 100.0])))
+                sample=lambda time: types.SimpleNamespace(position_w=np.array([100.0, 100.0, 100.0]))
+            )
 
         def reset(self):
             state.lifecycle.append("loop.reset")
@@ -75,8 +86,7 @@ def runtime(monkeypatch, tmp_path):
             self.step_index += 1
             self.time_s = self.step_index * self.dt_s
             assert self.step_index == state.physics_steps
-            return {"step": self.step_index,
-                    "post_step_state": {"position_w": actual_position(self.step_index)}}
+            return {"step": self.step_index, "post_step_state": {"position_w": actual_position(self.step_index)}}
 
     class Rig:
         def __init__(self, sim, width, height, views):
@@ -88,8 +98,7 @@ def runtime(monkeypatch, tmp_path):
         def read(self, poses):
             assert not self.closed
             state.rig_reads.append((state.physics_steps, copy.deepcopy(poses)))
-            return {name: np.full((self.height, self.width, 3), len(state.rig_reads), dtype=np.uint8)
-                    for name in poses}
+            return {name: np.full((self.height, self.width, 3), len(state.rig_reads), dtype=np.uint8) for name in poses}
 
         def close(self):
             self.closed = True
@@ -131,8 +140,13 @@ def runtime(monkeypatch, tmp_path):
     def build_scene(config, asset_path):
         sim = Simulation(config)
         sim.reset()
-        return sim, types.SimpleNamespace(update=lambda dt: None), types.SimpleNamespace(
-            read_state=lambda time: types.SimpleNamespace(position_w=actual_position(0)), telemetry=lambda: {})
+        return (
+            sim,
+            types.SimpleNamespace(update=lambda dt: None),
+            types.SimpleNamespace(
+                read_state=lambda time: types.SimpleNamespace(position_w=actual_position(0)), telemetry=lambda: {}
+            ),
+        )
 
     monkeypatch.setitem(sys.modules, "isaaclab", types.ModuleType("isaaclab"))
     monkeypatch.setitem(sys.modules, "isaaclab.sim", types.SimpleNamespace(get_current_stage=lambda: None))
@@ -150,11 +164,18 @@ def runtime(monkeypatch, tmp_path):
     config["scene"]["ground"]["enabled"] = False
     config["scene"]["light"]["enabled"] = False
     config["logging"]["directory"] = str(tmp_path / "runs")
-    config["recording"] = {**DEFAULT_RECORDING, "enabled": True, "fps": 60, "width": 4, "height": 2,
-                           "cameras": ["overview", "follow", "top"]}
+    config["recording"] = {
+        **DEFAULT_RECORDING,
+        "enabled": True,
+        "fps": 60,
+        "width": 4,
+        "height": 2,
+        "cameras": ["overview", "follow", "top"],
+    }
     state.config, state.actual_position = config, actual_position
-    state.run = lambda: app.run_simulation(types.SimpleNamespace(is_running=lambda: True), config,
-                                           tmp_path / "robot.usd", path_overlay=False)
+    state.run = lambda: app.run_simulation(
+        types.SimpleNamespace(is_running=lambda: True), config, tmp_path / "robot.usd", path_overlay=False
+    )
 
     def records():
         path = next((tmp_path / "runs").glob("*/telemetry.jsonl"))
@@ -205,10 +226,13 @@ def test_three_views_record_60_synchronized_frames_even_when_display_skips(runti
     assert runtime.pacer_frames == (50 if displayed else 0)
 
 
-@pytest.mark.parametrize("duration, steps, sample_times", [
-    (0.035, 7, [0.0, 0.02, 0.035]),
-    (0.001, 1, [0.0]),
-])
+@pytest.mark.parametrize(
+    "duration, steps, sample_times",
+    [
+        (0.035, 7, [0.0, 0.02, 0.035]),
+        (0.001, 1, [0.0]),
+    ],
+)
 def test_final_physics_state_fills_due_slots_without_extra_trailing_frame(runtime, duration, steps, sample_times):
     runtime.config["simulation"]["duration_s"] = duration
     assert runtime.run() == 0

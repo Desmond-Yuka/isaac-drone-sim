@@ -3,6 +3,7 @@
 The simulation clock sets the frame cadence; wall-clock pacing has no effect.
 Only this module's encoder preflight imports the optional imageio-ffmpeg package.
 """
+
 from __future__ import annotations
 
 import json
@@ -28,8 +29,13 @@ def ensure_video_dependencies() -> str:
         ) from error
     try:
         executable = imageio_ffmpeg.get_ffmpeg_exe()
-        available = subprocess.run([executable, "-hide_banner", "-encoders"], check=True, timeout=10,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        available = subprocess.run(
+            [executable, "-hide_banner", "-encoders"],
+            check=True,
+            timeout=10,
+            capture_output=True,
+            text=True,
+        )
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         raise RuntimeError("Video recording requires a working FFmpeg executable") from error
     if not re.search(r"\blibx264\b", available.stdout):
@@ -47,18 +53,45 @@ class _FFmpegWriter:
 
     def __init__(self, path, *, executable, fps, width, height):
         self._closed = False
-        self._stderr = tempfile.TemporaryFile(mode="w+b")
+        self._stderr = tempfile.TemporaryFile(mode="w+b")  # noqa: SIM115 - lives as long as the encoder
         command = [
-            executable, "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
-            "-f", "rawvideo", "-vcodec", "rawvideo", "-s", f"{width}x{height}",
-            "-pix_fmt", "rgb24", "-r", str(fps), "-i", "-", "-an",
-            "-c:v", "libx264", "-threads", "2", "-preset", "veryfast", "-crf", "20",
-            "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(path),
+            executable,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-n",
+            "-f",
+            "rawvideo",
+            "-vcodec",
+            "rawvideo",
+            "-s",
+            f"{width}x{height}",
+            "-pix_fmt",
+            "rgb24",
+            "-r",
+            str(fps),
+            "-i",
+            "-",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-threads",
+            "2",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(path),
         ]
         try:
-            self._process = subprocess.Popen(command, stdin=subprocess.PIPE,
-                                             stdout=subprocess.DEVNULL,
-                                             stderr=self._stderr, start_new_session=True)
+            self._process = subprocess.Popen(
+                command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=self._stderr, start_new_session=True
+            )
         except BaseException:
             self._stderr.close()
             raise
@@ -118,8 +151,7 @@ def _positive_number(value, name):
 
 
 def _even_size(value, name):
-    if (isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral)
-            or value < 2 or value % 2):
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value < 2 or value % 2:
         raise ValueError(f"recording.{name} must be a positive even integer")
     return int(value)
 
@@ -145,10 +177,15 @@ class MultiViewRecorder:
         self.width = _even_size(config["width"], "width")
         self.height = _even_size(config["height"], "height")
         cameras = config["cameras"]
-        if (not isinstance(cameras, list) or not 1 <= len(cameras) <= 3
-                or any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", name)
-                       or name == "combined" for name in cameras)
-                or len(set(cameras)) != len(cameras)):
+        if (
+            not isinstance(cameras, list)
+            or not 1 <= len(cameras) <= 3
+            or any(
+                not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", name) or name == "combined"
+                for name in cameras
+            )
+            or len(set(cameras)) != len(cameras)
+        ):
             raise ValueError("recording.cameras must be a list of one to three unique camera names")
         if not self.path.is_dir():
             raise ValueError("Video output directory must be an existing run directory")
@@ -177,8 +214,9 @@ class MultiViewRecorder:
             self._index_stream = (self.path / "video_frames.jsonl").open("x", encoding="utf-8")
             for name in self._video_frames:
                 width, height = self._dimensions(name)
-                self._writers[name] = writer_factory(self.path / f"{name}.mp4", fps=self.fps,
-                                                     width=width, height=height)
+                self._writers[name] = writer_factory(
+                    self.path / f"{name}.mp4", fps=self.fps, width=width, height=height
+                )
         except BaseException:
             self._failed = True
             try:
@@ -188,8 +226,7 @@ class MultiViewRecorder:
             raise
 
     def _dimensions(self, name):
-        return ((self._combined_width, self._combined_height) if name == "combined"
-                else (self.width, self.height))
+        return (self._combined_width, self._combined_height) if name == "combined" else (self.width, self.height)
 
     def _check_open(self):
         if self._closed:
@@ -208,8 +245,9 @@ class MultiViewRecorder:
 
     def _is_due(self, time_s, end_time_s=None):
         next_time = self._frames / self.fps
-        if end_time_s is not None and (next_time >= end_time_s
-                                      or math.isclose(next_time, end_time_s, rel_tol=0, abs_tol=1e-9)):
+        if end_time_s is not None and (
+            next_time >= end_time_s or math.isclose(next_time, end_time_s, rel_tol=0, abs_tol=1e-9)
+        ):
             return False
         return time_s >= next_time or math.isclose(time_s, next_time, rel_tol=1e-12, abs_tol=1e-12)
 
@@ -229,10 +267,15 @@ class MultiViewRecorder:
         prepared = {}
         for name in self.cameras:
             frame = np.asarray(frames[name])
-            if (frame.dtype != np.uint8 or frame.ndim != 3
-                    or frame.shape[:2] != (self.height, self.width) or frame.shape[2] not in (3, 4)):
-                raise ValueError(f"Video frame {name!r} must be uint8 RGB/RGBA "
-                                 f"with shape ({self.height}, {self.width}, 3 or 4)")
+            if (
+                frame.dtype != np.uint8
+                or frame.ndim != 3
+                or frame.shape[:2] != (self.height, self.width)
+                or frame.shape[2] not in (3, 4)
+            ):
+                raise ValueError(
+                    f"Video frame {name!r} must be uint8 RGB/RGBA with shape ({self.height}, {self.width}, 3 or 4)"
+                )
             prepared[name] = np.ascontiguousarray(frame[:, :, :3])
         prepared["combined"] = self._combine(prepared)
         return prepared
@@ -244,14 +287,12 @@ class MultiViewRecorder:
         if len(ordered) == 2:
             return np.concatenate(ordered, axis=1)
         mosaic = np.zeros((self._combined_height, self._combined_width, 3), dtype=np.uint8)
-        mosaic[:self.height] = ordered[0]
+        mosaic[: self.height] = ordered[0]
         for index, frame in enumerate(ordered[1:]):
             # Average each 2x2 pixel box using uint16 to avoid uint8 overflow.
-            small = frame.astype(np.uint16).reshape(self.height // 2, 2,
-                                                    self.width // 2, 2, 3).sum(axis=(1, 3)) // 4
+            small = frame.astype(np.uint16).reshape(self.height // 2, 2, self.width // 2, 2, 3).sum(axis=(1, 3)) // 4
             left = index * (self.width // 2)
-            mosaic[self.height:self.height + self.height // 2,
-                   left:left + self.width // 2] = small
+            mosaic[self.height : self.height + self.height // 2, left : left + self.width // 2] = small
         return mosaic
 
     def capture(self, time_s, frames, *, end_time_s=None) -> int:
@@ -270,11 +311,17 @@ class MultiViewRecorder:
                 for name, writer in self._writers.items():
                     writer.write(prepared[name])
                     self._video_frames[name] += 1
-                self._index_stream.write(json.dumps({
-                    "frame_index": self._frames,
-                    "video_time_s": self._frames / self.fps,
-                    "simulation_time_s": time_s,
-                }, allow_nan=False) + "\n")
+                self._index_stream.write(
+                    json.dumps(
+                        {
+                            "frame_index": self._frames,
+                            "video_time_s": self._frames / self.fps,
+                            "simulation_time_s": time_s,
+                        },
+                        allow_nan=False,
+                    )
+                    + "\n"
+                )
                 self._index_stream.flush()
                 self._frames += 1
                 captured += 1
@@ -310,15 +357,27 @@ class MultiViewRecorder:
     def summary(self) -> dict:
         """Return JSON-safe counts and relative paths, including failure state."""
         return {
-            "enabled": True, "fps": self.fps, "width": self.width, "height": self.height,
-            "frames": self._frames, "encoded_duration_s": self._frames / self.fps,
-            "closed": self._closed, "failed": self._failed, "errors": list(self._errors),
-            "camera_order": list(self.cameras), "layout": self._layout,
+            "enabled": True,
+            "fps": self.fps,
+            "width": self.width,
+            "height": self.height,
+            "frames": self._frames,
+            "encoded_duration_s": self._frames / self.fps,
+            "closed": self._closed,
+            "failed": self._failed,
+            "errors": list(self._errors),
+            "camera_order": list(self.cameras),
+            "layout": self._layout,
             "frame_index_file": "video_frames.jsonl",
             "videos": {
-                name: {"filename": f"{name}.mp4", "frames": frames, "fps": self.fps,
-                       "width": self._dimensions(name)[0], "height": self._dimensions(name)[1],
-                       "encoded_duration_s": frames / self.fps}
+                name: {
+                    "filename": f"{name}.mp4",
+                    "frames": frames,
+                    "fps": self.fps,
+                    "width": self._dimensions(name)[0],
+                    "height": self._dimensions(name)[1],
+                    "encoded_duration_s": frames / self.fps,
+                }
                 for name, frames in self._video_frames.items()
             },
         }

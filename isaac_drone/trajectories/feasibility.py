@@ -5,6 +5,7 @@ stability proof, motor-dynamics simulation, or continuous-time certificate.
 All masses, complete inertias, geometry and actuator bounds are supplied by the
 caller from the actual vehicle. No symmetric rotor layout is substituted.
 """
+
 from __future__ import annotations
 
 import math
@@ -32,15 +33,20 @@ def nominal_requirement(reference, mass: float, inertia: np.ndarray, gravity: np
     """
     if reference.jerk_w is None or reference.snap_w is None:
         raise ValueError("Analytic feasibility checks require reference jerk and snap")
-    force_w = mass*(reference.acceleration_w-gravity)
+    force_w = mass * (reference.acceleration_w - gravity)
     thrust = float(np.linalg.norm(force_w))
     if not np.isfinite(thrust) or thrust <= 1e-10:
         raise ValueError(f"Nominal thrust direction is degenerate at {where}")
     tilt = float(np.arctan2(np.linalg.norm(force_w[:2]), force_w[2]))
     _, omega, alpha = desired_attitude_kinematics(
-        force_w, mass*reference.jerk_w, mass*reference.snap_w,
-        reference.yaw_rad, reference.yaw_rate_rad_s, reference.yaw_acceleration_rad_s2)
-    torque = inertia@alpha+np.cross(omega, inertia@omega)
+        force_w,
+        mass * reference.jerk_w,
+        mass * reference.snap_w,
+        reference.yaw_rad,
+        reference.yaw_rate_rad_s,
+        reference.yaw_acceleration_rad_s2,
+    )
+    torque = inertia @ alpha + np.cross(omega, inertia @ omega)
     return thrust, torque, tilt, omega
 
 
@@ -49,8 +55,8 @@ def _sample_count(segment, law, name: str, start: float, end: float) -> int:
     if isinstance(law, HermiteTimeLaw):
         return segment.hermite_samples
     if name == "cruise":
-        revolutions = segment.revolutions*law.cruise_rate*(end-start)
-        return max(33, math.ceil(16*revolutions)+1)
+        revolutions = segment.revolutions * law.cruise_rate * (end - start)
+        return max(33, math.ceil(16 * revolutions) + 1)
     return 33
 
 
@@ -92,7 +98,7 @@ def validate_trajectory_feasibility(
     upper = finite_array(upper_thrust_n, (4,), "upper_thrust_n")
     if np.any(lower < 0) or np.any(upper < lower):
         raise ValueError("Feasibility thrust bounds must satisfy 0 <= lower <= upper")
-    if not np.allclose(matrix[:3], np.tile([[0.], [0.], [1.]], (1, 4)), rtol=0, atol=1e-7):
+    if not np.allclose(matrix[:3], np.tile([[0.0], [0.0], [1.0]], (1, 4)), rtol=0, atol=1e-7):
         raise ValueError("The upright controllers require every thrust axis along body +Z")
     if np.linalg.matrix_rank(matrix[[2, 3, 4, 5]]) != 4:
         raise ValueError("Allocation lacks four independent collective/attitude channels")
@@ -110,47 +116,56 @@ def validate_trajectory_feasibility(
 
     laws = trajectory.time_laws
     segments = {segment.name: segment for segment in trajectory.segments}
-    yaw_peaks = {name: abs(segment.yaw_change_rad)*laws[name].peak_rate for name, segment in segments.items()}
+    yaw_peaks = {name: abs(segment.yaw_change_rad) * laws[name].peak_rate for name, segment in segments.items()}
     yaw_peak = max(yaw_peaks.values(), default=0.0)
     for name, peak in yaw_peaks.items():
-        if peak > maximum_yaw_rate+1e-12*max(1.0, maximum_yaw_rate):
-            raise ValueError(f"Analytic {name} yaw-rate peak {peak:.9g} rad/s exceeds "
-                             f"limits.max_yaw_rate_rad_s={maximum_yaw_rate:.9g}; lengthen the segment or "
-                             "explicitly revise the limit")
+        if peak > maximum_yaw_rate + 1e-12 * max(1.0, maximum_yaw_rate):
+            raise ValueError(
+                f"Analytic {name} yaw-rate peak {peak:.9g} rad/s exceeds "
+                f"limits.max_yaw_rate_rad_s={maximum_yaw_rate:.9g}; lengthen the segment or "
+                "explicitly revise the limit"
+            )
 
     allocator = BoundedAllocator(matrix, np.ones(6), regularization=0.0)
 
     def allocate_exact(wrench: Wrench, label: str):
         result = allocator.allocate(wrench, lower, upper)
-        tolerance = _RESIDUAL_ATOL+_RESIDUAL_RTOL*np.maximum(1.0, np.abs(wrench.vector))
+        tolerance = _RESIDUAL_ATOL + _RESIDUAL_RTOL * np.maximum(1.0, np.abs(wrench.vector))
         if np.any(np.abs(result.residual) > tolerance):
-            raise ValueError(f"{label}: actuator bounds cannot realize the required nominal wrench; "
-                             f"requested={wrench.vector.tolist()}, residual={result.residual.tolist()}")
+            raise ValueError(
+                f"{label}: actuator bounds cannot realize the required nominal wrench; "
+                f"requested={wrench.vector.tolist()}, residual={result.residual.tolist()}"
+            )
         return result
 
     gravity_norm = float(np.linalg.norm(gravity))
     if gravity_norm <= 1e-12:
         raise ValueError("Hover feasibility requires a nonzero configured gravity vector")
     hover_tilt = float(np.arctan2(np.linalg.norm(gravity[:2]), -gravity[2]))
-    if hover_tilt > maximum_tilt+1e-10:
+    if hover_tilt > maximum_tilt + 1e-10:
         raise ValueError("Static hover requires a tilt beyond the configured maximum")
-    hover_wrench = Wrench([0, 0, mass*gravity_norm], np.zeros(3))
+    hover_wrench = Wrench([0, 0, mass * gravity_norm], np.zeros(3))
     hover = allocate_exact(hover_wrench, "Static hover infeasible")
 
-    pieces = [np.linspace(start, end, _sample_count(segments[phase], laws[phase], name, start, end))
-              for phase, name, start, end in trajectory.law_segments()]
-    times = np.unique(np.r_[origin, *pieces])
+    pieces = [
+        np.linspace(start, end, _sample_count(segments[phase], laws[phase], name, start, end))
+        for phase, name, start, end in trajectory.law_segments()
+    ]
+    times = np.unique(np.concatenate([[origin], *pieces]))
     sampled_thrusts, acceleration_norms, tilts, angular_speeds, torque_norms, residuals = [], [], [], [], [], []
     for time in times:
         reference = trajectory.sample(float(time))
         acceleration_norm = float(np.linalg.norm(reference.acceleration_w))
-        if maximum_acceleration is not None and acceleration_norm > maximum_acceleration+1e-10:
-            raise ValueError(f"Reference acceleration {acceleration_norm:.9g} m/s^2 at t={time:.9g} s "
-                             f"exceeds limits.max_acceleration_m_s2={maximum_acceleration:.9g}")
+        if maximum_acceleration is not None and acceleration_norm > maximum_acceleration + 1e-10:
+            raise ValueError(
+                f"Reference acceleration {acceleration_norm:.9g} m/s^2 at t={time:.9g} s "
+                f"exceeds limits.max_acceleration_m_s2={maximum_acceleration:.9g}"
+            )
         thrust, torque, tilt, omega = nominal_requirement(reference, mass, inertia, gravity, f"t={time:.9g} s")
-        if tilt > maximum_tilt+1e-10:
-            raise ValueError(f"Nominal required tilt {tilt:.9g} rad at t={time:.9g} s "
-                             f"exceeds limits.max_tilt_rad={maximum_tilt:.9g}")
+        if tilt > maximum_tilt + 1e-10:
+            raise ValueError(
+                f"Nominal required tilt {tilt:.9g} rad at t={time:.9g} s exceeds limits.max_tilt_rad={maximum_tilt:.9g}"
+            )
         result = allocate_exact(Wrench([0, 0, thrust], torque), f"Feedforward infeasible at t={time:.9g} s")
         sampled_thrusts.append(result.thrusts_n)
         acceleration_norms.append(acceleration_norm)
@@ -159,7 +174,7 @@ def validate_trajectory_feasibility(
         torque_norms.append(float(np.linalg.norm(torque)))
         residuals.append(result.residual)
     thrusts = np.array(sampled_thrusts)
-    thrust_fraction = thrusts.max(axis=0)/upper
+    thrust_fraction = thrusts.max(axis=0) / upper
     return {
         "status": "passed_nominal_sampled_checks",
         "continuous_time_certificate": False,
@@ -175,8 +190,8 @@ def validate_trajectory_feasibility(
         "sampled_max_required_torque_norm_nm": max(torque_norms),
         "sampled_min_rotor_thrust_n": thrusts.min(axis=0).tolist(),
         "sampled_max_rotor_thrust_n": thrusts.max(axis=0).tolist(),
-        "sampled_min_lower_thrust_margin_n": (thrusts-lower).min(axis=0).tolist(),
-        "sampled_min_upper_thrust_margin_n": (upper-thrusts).min(axis=0).tolist(),
+        "sampled_min_lower_thrust_margin_n": (thrusts - lower).min(axis=0).tolist(),
+        "sampled_min_upper_thrust_margin_n": (upper - thrusts).min(axis=0).tolist(),
         "sampled_max_absolute_allocation_residual": np.abs(residuals).max(axis=0).tolist(),
         # With one fixed k_f per rotor, n/n_max = sqrt(f/f_max).
         "sampled_max_thrust_fraction_of_max": thrust_fraction.tolist(),
@@ -192,7 +207,9 @@ def validate_trajectory_feasibility(
         "limitations": [
             "Finite samples can miss violations between sample times; only yaw-rate peaks are checked analytically.",
             "Nominal perfect-reference rigid-body feedforward is checked, not feedback-error or disturbance authority.",
-            "Actual supplied actuator bounds are instantaneous; lag, command slew and motor/battery dynamics require separate verification.",
-            "Passing does not establish tracking accuracy, closed-loop stability, contact-free motion or hardware safety.",
+            "Actual supplied actuator bounds are instantaneous; lag, command slew and motor/battery dynamics require "
+            "separate verification.",
+            "Passing does not establish tracking accuracy, closed-loop stability, contact-free motion or hardware "
+            "safety.",
         ],
     }

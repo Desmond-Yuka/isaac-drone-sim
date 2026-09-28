@@ -14,6 +14,7 @@ Add a controller by writing a parameter dataclass and a factory::
 
 and select it with ``controller: {kind: my_controller, ...params}`` in YAML.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

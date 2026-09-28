@@ -3,6 +3,7 @@
 Typical use: the same trajectory flown by different controllers or gains, e.g.
 ``python -m isaac_drone compare runs/A runs/B --labels geometric pid``.
 """
+
 from __future__ import annotations
 
 import csv
@@ -38,9 +39,17 @@ def comparison_rows(run_dirs, labels=None, phase=None) -> list[dict]:
         values = metrics["overall"] if phase is None else metrics["phases"].get(phase)
         if values is None:
             raise ValueError(f"{run} has no phase {phase!r}; available: {sorted(metrics['phases'])}")
-        rows.append({"label": label, "run": str(run), "controller": metrics["run"]["controller"],
-                     "trajectory": metrics["run"]["trajectory"], "success": metrics["run"]["success"],
-                     "completion_time_s": metrics["run"]["completion_time_s"], **values})
+        rows.append(
+            {
+                "label": label,
+                "run": str(run),
+                "controller": metrics["run"]["controller"],
+                "trajectory": metrics["run"]["trajectory"],
+                "success": metrics["run"]["success"],
+                "completion_time_s": metrics["run"]["completion_time_s"],
+                **values,
+            }
+        )
     return rows
 
 
@@ -82,8 +91,15 @@ def comparison_figures(run_dirs, labels, output_dir) -> list[Path]:
     for index, (start, name) in enumerate(phase_starts(config, metadata)):
         for axis in (error_axis, tilt_axis):
             axis.axvline(start, color="0.6", linestyle=":", linewidth=0.8)
-        error_axis.annotate(name, (start, 1.0), xycoords=("data", "axes fraction"), fontsize=8, color="0.4",
-                            xytext=(2, -10 - 10 * (index % 2)), textcoords="offset points")
+        error_axis.annotate(
+            name,
+            (start, 1.0),
+            xycoords=("data", "axes fraction"),
+            fontsize=8,
+            color="0.4",
+            xytext=(2, -10 - 10 * (index % 2)),
+            textcoords="offset points",
+        )
     error_axis.set_ylabel("|position error| [m]")
     tilt_axis.set_ylabel("tilt [deg]")
     tilt_axis.set_xlabel("Time [s]")
@@ -97,8 +113,13 @@ def comparison_figures(run_dirs, labels, output_dir) -> list[Path]:
     figure = Figure(figsize=(7, 7), layout="constrained")
     axis = figure.subplots()
     columns = data[0]
-    axis.plot(columns["target_position_w_x_m"], columns["target_position_w_y_m"], "k--", linewidth=1.0,
-              label=f"target ({labels[0]})")
+    axis.plot(
+        columns["target_position_w_x_m"],
+        columns["target_position_w_y_m"],
+        "k--",
+        linewidth=1.0,
+        label=f"target ({labels[0]})",
+    )
     for label, columns in zip(labels, data):
         axis.plot(columns["position_w_x_m"], columns["position_w_y_m"], linewidth=1.0, label=label)
     axis.set_aspect("equal", adjustable="datalim")
@@ -129,4 +150,3 @@ def compare_runs(run_dirs, output_dir, labels=None, phase=None, figures=True) ->
 
 
 __all__ = ["TABLE_KEYS", "compare_runs", "comparison_figures", "comparison_rows", "markdown_table", "write_csv"]
-

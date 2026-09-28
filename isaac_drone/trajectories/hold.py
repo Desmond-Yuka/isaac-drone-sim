@@ -1,4 +1,5 @@
 """A constant CoM target: the simplest closed-loop check (no motion segments)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

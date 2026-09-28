@@ -7,6 +7,7 @@ the dataclass's ``__post_init__`` (raise ``ValueError``). Supported field
 types: ``float``, ``int``, ``bool``, ``str``, ``Literal[...]``, fixed-length
 ``tuple[float, ...]`` (e.g. ``Vec3``), variable ``tuple[X, ...]`` and ``X | None``.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -72,8 +73,11 @@ def parse_params(cls, mapping, path: str):
         raise ConfigurationError(f"{path} must be a mapping")
     hints = typing.get_type_hints(cls)
     fields = {field.name: field for field in dataclasses.fields(cls) if field.init}
-    required = {name for name, field in fields.items()
-                if field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING}
+    required = {
+        name
+        for name, field in fields.items()
+        if field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING
+    }
     unknown, missing = set(mapping) - set(fields), required - set(mapping)
     if unknown or missing:
         raise ConfigurationError(f"{path}: unknown={sorted(unknown)}, missing={sorted(missing)}")
@@ -88,8 +92,10 @@ def parse_params(cls, mapping, path: str):
 
 def params_to_dict(params) -> dict:
     """Plain YAML/JSON-ready mapping of a parameter dataclass (tuples become lists)."""
+
     def plain(value):
         if isinstance(value, tuple):
             return [plain(item) for item in value]
         return value
+
     return {field.name: plain(getattr(params, field.name)) for field in dataclasses.fields(params)}

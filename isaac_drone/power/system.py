@@ -5,6 +5,7 @@ measured current input or an explicitly supplied calibrated load model. Likewise
 no rotor-speed or thrust scaling with battery voltage is assumed: an injected
 actuator-envelope calibration provides the allowable thrust for each motor.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -52,9 +53,9 @@ class LoadModel(Protocol):
     battery_state is historical state, not a guaranteed contemporaneous bus
     voltage. Returning thrust * airspeed / voltage is not a supported default.
     """
+
     def reset(self) -> None: ...
-    def current_a(self, vehicle_state: VehicleState, telemetry: Mapping,
-                  battery_state: BatteryState) -> float: ...
+    def current_a(self, vehicle_state: VehicleState, telemetry: Mapping, battery_state: BatteryState) -> float: ...
 
 
 class ActuatorEnvelope(Protocol):
@@ -64,14 +65,22 @@ class ActuatorEnvelope(Protocol):
     A backend that independently holds a prescribed thrust cannot thereby claim
     it simulates that response. Such behavior needs a calibrated actuator plugin.
     """
+
     def reset(self) -> None: ...
-    def thrust_bounds_n(self, battery_state: BatteryState,
-                        vehicle_state: VehicleState, telemetry: Mapping) -> ThrustBounds: ...
+    def thrust_bounds_n(
+        self, battery_state: BatteryState, vehicle_state: VehicleState, telemetry: Mapping
+    ) -> ThrustBounds: ...
 
 
 class PowerSystem:
-    def __init__(self, battery: PowerModel, *, current_source: str,
-                 actuator_envelope: ActuatorEnvelope, load_model: LoadModel | None = None):
+    def __init__(
+        self,
+        battery: PowerModel,
+        *,
+        current_source: str,
+        actuator_envelope: ActuatorEnvelope,
+        load_model: LoadModel | None = None,
+    ):
         if current_source not in ("external_measurement", "load_model"):
             raise ValueError("current_source must be 'external_measurement' or 'load_model'")
         if current_source == "load_model" and load_model is None:
@@ -82,8 +91,9 @@ class PowerSystem:
             raise ValueError("enabled power requires a calibrated ActuatorEnvelope; no voltage scaling is assumed")
         if not callable(getattr(actuator_envelope, "reset", None)):
             raise TypeError("ActuatorEnvelope must implement reset")
-        if load_model is not None and not all(callable(getattr(load_model, method, None))
-                                             for method in ("current_a", "reset")):
+        if load_model is not None and not all(
+            callable(getattr(load_model, method, None)) for method in ("current_a", "reset")
+        ):
             raise TypeError("LoadModel must implement current_a and reset")
         self.battery = battery
         self.current_source = current_source
@@ -105,9 +115,15 @@ class PowerSystem:
         """Supply an identified initial current/temperature operating point."""
         return self.battery.observe(current_a, temperature_c=temperature_c)
 
-    def update(self, vehicle_state: VehicleState, telemetry: Mapping, dt_s: float,
-               *, measured_current_a: float | None = None,
-               temperature_c: float | None = None) -> BatteryState:
+    def update(
+        self,
+        vehicle_state: VehicleState,
+        telemetry: Mapping,
+        dt_s: float,
+        *,
+        measured_current_a: float | None = None,
+        temperature_c: float | None = None,
+    ) -> BatteryState:
         if not isinstance(telemetry, Mapping):
             raise TypeError("telemetry must be a mapping of actual actuator/load observations")
         if self.current_source == "external_measurement":
@@ -137,22 +153,42 @@ class PowerSystem:
 
 
 _BATTERY_FIELDS = (
-    "capacity_ah", "initial_soc", "ocv_soc_voltage_table", "series_resistance_ohm",
-    "charge_coulombic_efficiency", "discharge_coulombic_efficiency", "cutoff_voltage_v",
-    "maximum_voltage_v", "max_discharge_current_a", "max_charge_current_a",
-    "calibration_temperature_c", "valid_temperature_range_c", "calibration_id",
+    "capacity_ah",
+    "initial_soc",
+    "ocv_soc_voltage_table",
+    "series_resistance_ohm",
+    "charge_coulombic_efficiency",
+    "discharge_coulombic_efficiency",
+    "cutoff_voltage_v",
+    "maximum_voltage_v",
+    "max_discharge_current_a",
+    "max_charge_current_a",
+    "calibration_temperature_c",
+    "valid_temperature_range_c",
+    "calibration_id",
 )
 
 
 def _validate_optional_parameters(config: Mapping) -> None:
     if config.get("model") is not None and config["model"] != "equivalent_circuit":
         raise ValueError("unsupported power.model")
-    if config.get("current_source") is not None and config["current_source"] not in ("external_measurement", "load_model"):
+    if config.get("current_source") is not None and config["current_source"] not in (
+        "external_measurement",
+        "load_model",
+    ):
         raise ValueError("power.current_source must be external_measurement or load_model")
-    if config.get("calibration_id") is not None and (not isinstance(config["calibration_id"], str) or not config["calibration_id"].strip()):
+    if config.get("calibration_id") is not None and (
+        not isinstance(config["calibration_id"], str) or not config["calibration_id"].strip()
+    ):
         raise ValueError("calibration_id must be a nonempty string or None")
-    positive = {"capacity_ah", "charge_coulombic_efficiency", "discharge_coulombic_efficiency",
-                "cutoff_voltage_v", "maximum_voltage_v", "max_discharge_current_a"}
+    positive = {
+        "capacity_ah",
+        "charge_coulombic_efficiency",
+        "discharge_coulombic_efficiency",
+        "cutoff_voltage_v",
+        "maximum_voltage_v",
+        "max_discharge_current_a",
+    }
     nonnegative = {"series_resistance_ohm", "max_charge_current_a"}
     scalars = positive | nonnegative | {"initial_soc", "calibration_temperature_c", "initial_temperature_c"}
     for key in scalars:
@@ -160,7 +196,10 @@ def _validate_optional_parameters(config: Mapping) -> None:
             value = finite_scalar(config[key], key)
             if (key in positive and value <= 0) or (key in nonnegative and value < 0):
                 raise ValueError(f"{key} is outside its allowed range")
-            if key in ("initial_soc", "charge_coulombic_efficiency", "discharge_coulombic_efficiency") and not 0 <= value <= 1:
+            if (
+                key in ("initial_soc", "charge_coulombic_efficiency", "discharge_coulombic_efficiency")
+                and not 0 <= value <= 1
+            ):
                 raise ValueError(f"{key} must lie in [0, 1]")
     if config.get("ocv_soc_voltage_table") is not None:
         validate_ocv_table(config["ocv_soc_voltage_table"])
@@ -171,9 +210,12 @@ def _validate_optional_parameters(config: Mapping) -> None:
         for key in ("calibration_temperature_c", "initial_temperature_c"):
             if config.get(key) is not None and not bounds[0] <= config[key] <= bounds[1]:
                 raise ValueError(f"{key} must lie within valid_temperature_range_c")
-    if config.get("cutoff_voltage_v") is not None and config.get("maximum_voltage_v") is not None:
-        if config["cutoff_voltage_v"] >= config["maximum_voltage_v"]:
-            raise ValueError("maximum_voltage_v must exceed cutoff_voltage_v")
+    if (
+        config.get("cutoff_voltage_v") is not None
+        and config.get("maximum_voltage_v") is not None
+        and config["cutoff_voltage_v"] >= config["maximum_voltage_v"]
+    ):
+        raise ValueError("maximum_voltage_v must exceed cutoff_voltage_v")
     if config.get("rc_branches") is not None:
         if not isinstance(config["rc_branches"], (list, tuple)):
             raise ValueError("rc_branches must be a list or None")
@@ -223,8 +265,11 @@ def build_battery(config: Mapping) -> EquivalentCircuitBattery | None:
         if any(branch.get(key) is None for key in keys):
             raise ValueError("every RC branch requires resistance, capacitance and initial polarization")
         parsed_branches.append(RCBranch(**{key: branch[key] for key in keys}))
-    return EquivalentCircuitBattery(**{key: config[key] for key in _BATTERY_FIELDS},
-        initial_temperature_c=config["initial_temperature_c"], rc_branches=parsed_branches)
+    return EquivalentCircuitBattery(
+        **{key: config[key] for key in _BATTERY_FIELDS},
+        initial_temperature_c=config["initial_temperature_c"],
+        rc_branches=parsed_branches,
+    )
 
 
 def validate_power_config(config: Mapping) -> None:
@@ -234,11 +279,13 @@ def validate_power_config(config: Mapping) -> None:
         raise ValueError("enabled power.current_source must be external_measurement or load_model")
 
 
-def build_power(config: Mapping, *, load_model: LoadModel | None = None,
-                actuator_envelope: ActuatorEnvelope | None = None) -> PowerSystem | None:
+def build_power(
+    config: Mapping, *, load_model: LoadModel | None = None, actuator_envelope: ActuatorEnvelope | None = None
+) -> PowerSystem | None:
     validate_power_config(config)
     battery = build_battery(config)
     if battery is None:
         return None
-    return PowerSystem(battery, current_source=config["current_source"],
-        load_model=load_model, actuator_envelope=actuator_envelope)
+    return PowerSystem(
+        battery, current_source=config["current_source"], load_model=load_model, actuator_envelope=actuator_envelope
+    )

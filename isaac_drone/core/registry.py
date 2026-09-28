@@ -8,6 +8,7 @@ A registry maps a kind name to a factory and its parameter dataclass::
 ``parse(section, path)`` validates ``{kind: ..., **params}`` into
 ``(kind, params)``; ``build(section, path, **context)`` also constructs it.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
@@ -37,6 +38,7 @@ class Registry:
             summary = description or next(iter((factory.__doc__ or "").strip().splitlines()), "")
             self._entries[name] = Entry(name, factory, params, summary)
             return factory
+
         return decorator
 
     def names(self) -> list[str]:
@@ -52,8 +54,9 @@ class Registry:
         if not isinstance(section, Mapping) or "kind" not in section:
             raise ConfigurationError(f"{path} must be a mapping with a 'kind' ({'/'.join(self.names())})")
         entry = self.entry(section["kind"])
-        params = parse_params(entry.params, {key: value for key, value in section.items() if key != "kind"},
-                              f"{path}[{entry.name}]")
+        params = parse_params(
+            entry.params, {key: value for key, value in section.items() if key != "kind"}, f"{path}[{entry.name}]"
+        )
         return entry.name, params
 
     def build(self, section: Mapping, path: str, **context):

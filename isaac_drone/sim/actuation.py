@@ -4,6 +4,7 @@ This is a coefficient-based propulsion model, not CFD or a calibrated electric
 motor model. Positive running commands retain native per-motor minimum thrust;
 zero commands explicitly request spin-down to stopped rotors.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -26,6 +27,7 @@ def native_value(value, like):
     if isinstance(like, np.ndarray):
         return np.asarray(value, dtype=like.dtype)
     import torch
+
     return torch.as_tensor(value, dtype=like.dtype, device=like.device)
 
 
@@ -48,7 +50,7 @@ def thrust_to_motor_speeds(thrust_n, sampled_kf, thrust_min_n, thrust_max_n):
     if np.any(thrust < 0):
         raise ValueError("Rotor thrust requests must be nonnegative")
     limited = np.where(thrust == 0, 0.0, np.clip(thrust, lower, upper))
-    return finite_array(np.sqrt(limited/kf), shape, "target motor speed rps")
+    return finite_array(np.sqrt(limited / kf), shape, "target motor speed rps")
 
 
 class NativeRpsActuator:
@@ -69,7 +71,7 @@ class NativeRpsActuator:
         bounds = finite_array(numpy_value(self.native.cfg.thrust_range), (2,), "native thrust_range")
         if np.any(kf <= 0) or bounds[0] < 0 or bounds[1] <= 0 or bounds[0] > bounds[1]:
             raise ValueError("Native thrust coefficient/limits are invalid")
-        return kf, np.sqrt(bounds[0]/kf), np.sqrt(bounds[1]/kf)
+        return kf, np.sqrt(bounds[0] / kf), np.sqrt(bounds[1] / kf)
 
     def _synchronize_thrust(self):
         # During spin-up/spin-down, thrust can lie below the minimum running

@@ -4,6 +4,7 @@ Kinematic acceleration and net wrench are interval averages inferred from
 motion, not IMU or load-cell measurements. No acceleration is fabricated at
 reset: the first sample uses both ends of the first completed physics step.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -81,8 +82,12 @@ def build_basic_record(
     dt = after.time_s - before.time_s
     if not np.isfinite(dt) or dt <= 0:
         raise ValueError("Basic telemetry requires a positive completed physics interval")
-    if (isinstance(reference_sample_time_s, bool) or not np.isfinite(reference_sample_time_s)
-            or reference_sample_time_s < 0 or reference_sample_time_s > before.time_s + 1e-12):
+    if (
+        isinstance(reference_sample_time_s, bool)
+        or not np.isfinite(reference_sample_time_s)
+        or reference_sample_time_s < 0
+        or reference_sample_time_s > before.time_s + 1e-12
+    ):
         raise ValueError("Control reference must have been sampled no later than the interval start")
     rotation_before = quaternion_to_matrix(before.quaternion_wxyz)
     rotation_after = quaternion_to_matrix(after.quaternion_wxyz)

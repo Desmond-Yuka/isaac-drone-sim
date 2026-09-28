@@ -1,11 +1,17 @@
 """Command shaping shared by controllers: acceleration limit and thrust-vector tilt cone."""
+
 from __future__ import annotations
 
 import numpy as np
 
 
-def limited_thrust_vector(acceleration_w: np.ndarray, mass_kg: float, gravity_w: np.ndarray, max_tilt_rad: float,
-                          max_acceleration_m_s2: float | None = None) -> tuple[np.ndarray, bool]:
+def limited_thrust_vector(
+    acceleration_w: np.ndarray,
+    mass_kg: float,
+    gravity_w: np.ndarray,
+    max_tilt_rad: float,
+    max_acceleration_m_s2: float | None = None,
+) -> tuple[np.ndarray, bool]:
     """World thrust force ``m (a - g)`` for a commanded net acceleration, within the limits.
 
     The acceleration norm is first scaled to ``max_acceleration_m_s2`` (if set);

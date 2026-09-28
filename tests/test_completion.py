@@ -1,5 +1,7 @@
 """Measured hover acceptance must not be confused with a completed reference."""
+
 from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -11,7 +13,7 @@ from isaac_drone.trajectories.completion import CompletionMonitor
 
 
 def sample(time, **kwargs):
-    return replace(VehicleState(time, np.zeros(3), np.array([1., 0, 0, 0]), np.zeros(3), np.zeros(3)), **kwargs)
+    return replace(VehicleState(time, np.zeros(3), np.array([1.0, 0, 0, 0]), np.zeros(3), np.zeros(3)), **kwargs)
 
 
 def monitor():
@@ -28,12 +30,15 @@ def test_reference_finishing_alone_is_not_success_and_reset_discards_dwell():
     assert not m.update(sample(40), target, "hold")["achieved"]
 
 
-@pytest.mark.parametrize("change", [
-    {"position_w": np.array([.11, 0, 0])},
-    {"linear_velocity_w": np.array([0, .11, 0])},
-    {"angular_velocity_b": np.array([0, 0, .11])},
-    {"quaternion_wxyz": np.array([np.cos(.11), 0, 0, np.sin(.11)])},
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"position_w": np.array([0.11, 0, 0])},
+        {"linear_velocity_w": np.array([0, 0.11, 0])},
+        {"angular_velocity_b": np.array([0, 0, 0.11])},
+        {"quaternion_wxyz": np.array([np.cos(0.11), 0, 0, np.sin(0.11)])},
+    ],
+)
 def test_each_physical_error_breaks_continuous_dwell_and_revokes_success(change):
     m, target = monitor(), TrajectorySetpoint(np.zeros(3))
     m.update(sample(30), target, "hold")
@@ -46,7 +51,7 @@ def test_each_physical_error_breaks_continuous_dwell_and_revokes_success(change)
 
 
 def test_timeout_is_not_overwritten_by_late_success_and_yaw_is_wrapped():
-    m, target = monitor(), TrajectorySetpoint(np.zeros(3), yaw_rad=6*np.pi)
+    m, target = monitor(), TrajectorySetpoint(np.zeros(3), yaw_rad=6 * np.pi)
     assert m.update(sample(30), target, "hold")["within_tolerances"]
     m.update(sample(31, position_w=np.ones(3)), target, "hold")
     assert m.update(sample(40), target, "hold")["timed_out"]
@@ -61,7 +66,7 @@ def test_helix_preset_requires_a_stopped_ground_start_and_a_complete_mission():
     assert cfg["vehicle"]["launch"]["from_ground"]
     assert cfg["trajectory"]["kind"] == "helix"
     assert not any(cfg["vehicle"]["initial_state"]["rps"].values())
-    for section, key, value in [("launch", "spin_up_s", 0.0), ("initial_state", "lin_vel", [0, 0, .1])]:
+    for section, key, value in [("launch", "spin_up_s", 0.0), ("initial_state", "lin_vel", [0, 0, 0.1])]:
         bad = load_config(HELIX_CONFIG)
         bad["vehicle"][section][key] = value
         with pytest.raises(ValueError):

@@ -5,6 +5,7 @@ One run = ``duration_s / dt`` physics steps of ``MotionControlLoop`` against a
 telemetry.jsonl, basic.csv, schema) whatever the backend. Display, video, plots
 and metrics attach as hooks, so the stepping logic is written exactly once.
 """
+
 from __future__ import annotations
 
 import math
@@ -31,15 +32,23 @@ def physics_step_count(duration_s: float, dt_s: float) -> int:
 
 def provenance() -> dict:
     """Code version and interpreter of this run; unknown fields stay None."""
+
     def git(*args):
         try:
-            return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True,
-                                  timeout=5, check=True).stdout.strip()
+            return subprocess.run(
+                ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, timeout=5, check=True
+            ).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             return None
+
     status = git("status", "--porcelain", "--untracked-files=no")
-    return {"git_commit": git("rev-parse", "HEAD"), "git_dirty": None if status is None else bool(status),
-            "python": sys.version.split()[0], "platform": platform.platform(), "argv": list(sys.argv)}
+    return {
+        "git_commit": git("rev-parse", "HEAD"),
+        "git_dirty": None if status is None else bool(status),
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "argv": list(sys.argv),
+    }
 
 
 def resolve_log_root(config: dict) -> Path:
@@ -110,8 +119,9 @@ def _summaries(hooks) -> dict:
     return result
 
 
-def run_experiment(loop, driver, config: dict, *, metadata: dict, hooks=(), log_root: Path | None = None,
-                   log=print) -> RunResult:
+def run_experiment(
+    loop, driver, config: dict, *, metadata: dict, hooks=(), log_root: Path | None = None, log=print
+) -> RunResult:
     """Fly one reset ``loop`` for the configured duration and record it.
 
     Success requires every requested step and, if the trajectory defines one,
@@ -147,9 +157,17 @@ def run_experiment(loop, driver, config: dict, *, metadata: dict, hooks=(), log_
             mission = loop.mission_status
             success = loop.step_index == steps and (mission is None or bool(mission["achieved"]))
             summaries = _summaries(hooks)
-            recorder.write({"event": "finished", "physics_steps": loop.step_index,
-                            "simulated_time_s": loop.time_s, "requested_steps": steps,
-                            "success": success, "mission": mission, **summaries})
+            recorder.write(
+                {
+                    "event": "finished",
+                    "physics_steps": loop.step_index,
+                    "simulated_time_s": loop.time_s,
+                    "requested_steps": steps,
+                    "success": success,
+                    "mission": mission,
+                    **summaries,
+                }
+            )
         except BaseException as error:
             recorder.write({"event": "aborted", "time_s": loop.time_s, "error": str(error), **_summaries(hooks)})
             raise

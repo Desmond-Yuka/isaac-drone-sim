@@ -1,10 +1,11 @@
 """Video clock, synchronized views, mosaic pixels and encoder failure handling."""
+
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -14,17 +15,17 @@ from isaac_drone.viz.video import MultiViewRecorder, _FFmpegWriter, ensure_video
 
 
 def config(**changes):
-    result = {"enabled": True, "fps": 60, "width": 8, "height": 6,
-              "cameras": ["overview", "follow", "top"]}
+    result = {"enabled": True, "fps": 60, "width": 8, "height": 6, "cameras": ["overview", "follow", "top"]}
     result.update(changes)
     return result
 
 
 def views(settings=None):
     settings = settings or config()
-    return {name: np.full((settings["height"], settings["width"], 4), index * 70,
-                          dtype=np.uint8)
-            for index, name in enumerate(settings["cameras"], start=1)}
+    return {
+        name: np.full((settings["height"], settings["width"], 4), index * 70, dtype=np.uint8)
+        for index, name in enumerate(settings["cameras"], start=1)
+    }
 
 
 class FakeWriter:
@@ -90,7 +91,7 @@ def test_simulation_clock_produces_exact_duration_and_synchronizes_all_outputs(t
     assert len(rows) == 1200
     assert rows[0] == {"frame_index": 0, "video_time_s": 0, "simulation_time_s": 0}
     assert rows[-1]["video_time_s"] == pytest.approx(1199 / 60)
-    assert all(0 <= row["simulation_time_s"] - row["video_time_s"] < .005 + 1e-12 for row in rows)
+    assert all(0 <= row["simulation_time_s"] - row["video_time_s"] < 0.005 + 1e-12 for row in rows)
 
 
 def test_cadence_repeated_queries_and_clock_gaps_are_explicit_in_frame_index(tmp_path):
@@ -98,24 +99,24 @@ def test_cadence_repeated_queries_and_clock_gaps_are_explicit_in_frame_index(tmp
     assert recorder.due(0) and recorder.due(0)
     assert recorder.capture(0, views()) == 1
     assert not recorder.due(0)
-    assert recorder.capture(.05, views()) == 0
-    assert recorder.capture(.3, views()) == 3
-    assert not recorder.due(.3)
-    assert recorder.due(.4)
+    assert recorder.capture(0.05, views()) == 0
+    assert recorder.capture(0.3, views()) == 3
+    assert not recorder.due(0.3)
+    assert recorder.due(0.4)
     assert all(len(writer.frames) == 4 for writer in writers.values())
-    assert [row["simulation_time_s"] for row in frame_index(tmp_path)] == [0, .3, .3, .3]
+    assert [row["simulation_time_s"] for row in frame_index(tmp_path)] == [0, 0.3, 0.3, 0.3]
     with pytest.raises(ValueError, match="backwards"):
-        recorder.capture(.1, views())
+        recorder.capture(0.1, views())
     recorder.close()
 
 
-@pytest.mark.parametrize("end, expected", [(20, 1200), (.035, 3), (.1, 6), (0, 0)])
+@pytest.mark.parametrize("end, expected", [(20, 1200), (0.035, 3), (0.1, 6), (0, 0)])
 def test_exclusive_end_time_includes_partial_last_interval_without_an_extra_frame(tmp_path, end, expected):
     recorder, writers = make_recorder(tmp_path)
     # A single final sample also exercises filling all pending video instants.
     assert recorder.capture(end, views(), end_time_s=end) == expected
     assert not recorder.due(end, end_time_s=end)
-    assert recorder.capture(end + .01, views(), end_time_s=end) == 0
+    assert recorder.capture(end + 0.01, views(), end_time_s=end) == 0
     recorder.close()
     assert all(len(writer.frames) == expected for writer in writers.values())
     rows = frame_index(tmp_path)
@@ -125,8 +126,8 @@ def test_exclusive_end_time_includes_partial_last_interval_without_an_extra_fram
 
 def test_exclusive_end_boundary_tolerates_floating_point_roundoff(tmp_path):
     recorder, _ = make_recorder(tmp_path, config(fps=10))
-    assert recorder.capture(.30000000000000004, views(), end_time_s=.30000000000000004) == 3
-    assert not recorder.due(.30000000000000004, end_time_s=.30000000000000004)
+    assert recorder.capture(0.30000000000000004, views(), end_time_s=0.30000000000000004) == 3
+    assert not recorder.due(0.30000000000000004, end_time_s=0.30000000000000004)
     recorder.close()
 
 
@@ -145,10 +146,13 @@ def test_mosaic_preserves_camera_order_averages_pixels_and_pads_to_even_height(t
     assert writers["follow"].frames[0][0, 0, 0] == 0
 
 
-@pytest.mark.parametrize("cameras, shape, layout", [
-    (["follow"], (6, 8, 3), "single"),
-    (["top", "overview"], (6, 16, 3), "side_by_side"),
-])
+@pytest.mark.parametrize(
+    "cameras, shape, layout",
+    [
+        (["follow"], (6, 8, 3), "single"),
+        (["top", "overview"], (6, 16, 3), "side_by_side"),
+    ],
+)
 def test_one_and_two_camera_mosaics(tmp_path, cameras, shape, layout):
     settings = config(cameras=cameras)
     recorder, writers = make_recorder(tmp_path, settings)
@@ -162,12 +166,15 @@ def test_one_and_two_camera_mosaics(tmp_path, cameras, shape, layout):
         assert np.all(mosaic[:, 8:] == 140)
 
 
-@pytest.mark.parametrize("bad_frame", [
-    np.zeros((6, 8, 3), dtype=float),
-    np.zeros((6, 8, 2), dtype=np.uint8),
-    np.zeros((8, 6, 3), dtype=np.uint8),
-    np.zeros((6, 8), dtype=np.uint8),
-])
+@pytest.mark.parametrize(
+    "bad_frame",
+    [
+        np.zeros((6, 8, 3), dtype=float),
+        np.zeros((6, 8, 2), dtype=np.uint8),
+        np.zeros((8, 6, 3), dtype=np.uint8),
+        np.zeros((6, 8), dtype=np.uint8),
+    ],
+)
 def test_bad_view_is_rejected_before_any_encoder_advances(tmp_path, bad_frame):
     recorder, writers = make_recorder(tmp_path)
     snapshot = views()
@@ -206,12 +213,24 @@ def test_invalid_clock_values_are_rejected(tmp_path, bad_time):
     recorder.close()
 
 
-@pytest.mark.parametrize("changes", [
-    {"fps": 0}, {"fps": True}, {"fps": np.nan}, {"width": 7}, {"height": 5},
-    {"width": False}, {"height": 0}, {"cameras": []}, {"cameras": "follow"},
-    {"cameras": ["follow", "follow"]}, {"cameras": ["../escape"]},
-    {"cameras": ["combined"]}, {"cameras": ["a", "b", "c", "d"]},
-])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"fps": 0},
+        {"fps": True},
+        {"fps": np.nan},
+        {"width": 7},
+        {"height": 5},
+        {"width": False},
+        {"height": 0},
+        {"cameras": []},
+        {"cameras": "follow"},
+        {"cameras": ["follow", "follow"]},
+        {"cameras": ["../escape"]},
+        {"cameras": ["combined"]},
+        {"cameras": ["a", "b", "c", "d"]},
+    ],
+)
 def test_bad_configuration_creates_no_files(tmp_path, changes):
     with pytest.raises(ValueError):
         make_recorder(tmp_path, config(**changes))
@@ -271,10 +290,9 @@ def test_constructor_failure_closes_already_created_writers(tmp_path):
 
 def test_keyboard_interrupt_finalizes_recorded_frames(tmp_path):
     recorder, writers = make_recorder(tmp_path)
-    with pytest.raises(KeyboardInterrupt):
-        with recorder:
-            recorder.capture(0, views())
-            raise KeyboardInterrupt()
+    with pytest.raises(KeyboardInterrupt), recorder:
+        recorder.capture(0, views())
+        raise KeyboardInterrupt()
     assert all(writer.close_count == 1 and len(writer.frames) == 1 for writer in writers.values())
     assert len(frame_index(tmp_path)) == 1
 
@@ -336,7 +354,7 @@ def test_real_mp4_streams_have_matching_frame_counts_and_exact_dimensions(tmp_pa
         path = tmp_path / video["filename"]
         count, duration = ffmpeg.count_frames_and_secs(str(path))
         assert count == 5
-        assert duration == pytest.approx(.5, abs=.01)
+        assert duration == pytest.approx(0.5, abs=0.01)
         reader = ffmpeg.read_frames(str(path))
         metadata = next(reader)
         assert metadata["size"] == (video["width"], video["height"])

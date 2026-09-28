@@ -14,10 +14,12 @@ calibration temperature range. Missing temperature remains unknown; no ambient
 or room temperature is silently inserted. Energy counters start at reset and
 are not estimates of physically remaining energy.
 """
+
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import Protocol
 
 import numpy as np
 
@@ -35,7 +37,9 @@ class ModelValidityError(ValueError):
 def _number(value, name: str, *, positive=False, nonnegative=False) -> float:
     value = finite_scalar(value, name)
     if not np.isfinite(value) or (positive and value <= 0) or (nonnegative and value < 0):
-        raise ValueError(f"{name} must be finite" + (" and positive" if positive else " and nonnegative" if nonnegative else ""))
+        raise ValueError(
+            f"{name} must be finite" + (" and positive" if positive else " and nonnegative" if nonnegative else "")
+        )
     return value
 
 
@@ -62,8 +66,9 @@ class RCBranch:
             object.__setattr__(self, name, _number(getattr(self, name), name, positive=True))
         if not np.isfinite(self.resistance_ohm * self.capacitance_f) or self.resistance_ohm * self.capacitance_f <= 0:
             raise ValueError("RC time constant must be finite and positive")
-        object.__setattr__(self, "initial_polarization_v", _number(
-            self.initial_polarization_v, "initial_polarization_v"))
+        object.__setattr__(
+            self, "initial_polarization_v", _number(self.initial_polarization_v, "initial_polarization_v")
+        )
 
 
 @dataclass(frozen=True)
@@ -90,14 +95,25 @@ class PowerModel(Protocol):
 
 
 class EquivalentCircuitBattery:
-    def __init__(self, *, capacity_ah: float, initial_soc: float,
-                 ocv_soc_voltage_table, series_resistance_ohm: float,
-                 rc_branches: Sequence[RCBranch], charge_coulombic_efficiency: float,
-                 discharge_coulombic_efficiency: float, cutoff_voltage_v: float,
-                 maximum_voltage_v: float, max_discharge_current_a: float,
-                 max_charge_current_a: float, calibration_temperature_c: float,
-                 valid_temperature_range_c, initial_temperature_c: float | None,
-                 calibration_id: str):
+    def __init__(
+        self,
+        *,
+        capacity_ah: float,
+        initial_soc: float,
+        ocv_soc_voltage_table,
+        series_resistance_ohm: float,
+        rc_branches: Sequence[RCBranch],
+        charge_coulombic_efficiency: float,
+        discharge_coulombic_efficiency: float,
+        cutoff_voltage_v: float,
+        maximum_voltage_v: float,
+        max_discharge_current_a: float,
+        max_charge_current_a: float,
+        calibration_temperature_c: float,
+        valid_temperature_range_c,
+        initial_temperature_c: float | None,
+        calibration_id: str,
+    ):
         if not isinstance(calibration_id, str) or not calibration_id.strip():
             raise ValueError("calibration_id must identify the source of battery parameters")
         self.calibration_id = calibration_id
@@ -113,7 +129,9 @@ class EquivalentCircuitBattery:
         if not all(isinstance(branch, RCBranch) for branch in self.rc_branches):
             raise TypeError("rc_branches must contain RCBranch instances")
         self.charge_efficiency = _number(charge_coulombic_efficiency, "charge_coulombic_efficiency", positive=True)
-        self.discharge_efficiency = _number(discharge_coulombic_efficiency, "discharge_coulombic_efficiency", positive=True)
+        self.discharge_efficiency = _number(
+            discharge_coulombic_efficiency, "discharge_coulombic_efficiency", positive=True
+        )
         if self.charge_efficiency > 1 or self.discharge_efficiency > 1:
             raise ValueError("coulombic efficiencies must lie in (0, 1]")
         self.cutoff_v = _number(cutoff_voltage_v, "cutoff_voltage_v", positive=True)
@@ -175,10 +193,19 @@ class EquivalentCircuitBattery:
 
     def reset(self) -> BatteryState:
         soc = self.initial_soc
-        self._state = BatteryState(0.0, soc, self.ocv(soc), None, None,
+        self._state = BatteryState(
+            0.0,
+            soc,
+            self.ocv(soc),
+            None,
+            None,
             tuple(branch.initial_polarization_v for branch in self.rc_branches),
-            0.0, 0.0, 0.0, self.initial_temperature_c,
-            self._flags(soc, None, self.initial_temperature_c))
+            0.0,
+            0.0,
+            0.0,
+            self.initial_temperature_c,
+            self._flags(soc, None, self.initial_temperature_c),
+        )
         return self._state
 
     def observe(self, current_a: float, *, temperature_c: float | None = None) -> BatteryState:
@@ -191,9 +218,19 @@ class EquivalentCircuitBattery:
         temperature = self._temperature(temperature_c)
         old = self.state
         voltage = old.open_circuit_voltage_v - current * self.r0 - sum(old.polarization_voltage_v)
-        self._state = BatteryState(old.elapsed_s, old.soc, old.open_circuit_voltage_v, voltage,
-            current, old.polarization_voltage_v, old.energy_delivered_j, old.ohmic_heat_j,
-            old.charge_throughput_c, temperature, self._flags(old.soc, voltage, temperature))
+        self._state = BatteryState(
+            old.elapsed_s,
+            old.soc,
+            old.open_circuit_voltage_v,
+            voltage,
+            current,
+            old.polarization_voltage_v,
+            old.energy_delivered_j,
+            old.ohmic_heat_j,
+            old.charge_throughput_c,
+            temperature,
+            self._flags(old.soc, voltage, temperature),
+        )
         return self._state
 
     def _ocv_integral(self, soc_start: float, soc_end: float, dt_s: float) -> float:
@@ -237,14 +274,15 @@ class EquivalentCircuitBattery:
             if x < 1e-3:
                 # Stable integrals of (1-exp(-t/tau)) and its square;
                 # avoid cancellation for fast physics ticks / slow RC branches.
-                a = tau * x * x * (0.5 + x * (-1/6 + x * (1/24 + x * (-1/120 + x/720))))
-                b = tau * x * x * x * (1/3 + x * (-1/4 + x * (7/60 + x * (-1/24 + x * 31/2520))))
+                a = tau * x * x * (0.5 + x * (-1 / 6 + x * (1 / 24 + x * (-1 / 120 + x / 720))))
+                b = tau * x * x * x * (1 / 3 + x * (-1 / 4 + x * (7 / 60 + x * (-1 / 24 + x * 31 / 2520))))
             else:
                 a = dt - tau * one_minus_decay
                 b = dt - 2 * tau * one_minus_decay + tau * (-np.expm1(-2 * x)) / 2
             polarization_integral += initial_v * dt + change_v * a
-            branch_heat = (initial_v * initial_v * dt
-                + 2 * initial_v * change_v * a + change_v * change_v * b) / branch.resistance_ohm
+            branch_heat = (
+                initial_v * initial_v * dt + 2 * initial_v * change_v * a + change_v * change_v * b
+            ) / branch.resistance_ohm
             heat += max(0.0, float(branch_heat))
         ocv = self.ocv(soc)
         terminal_v = ocv - current * self.r0 - sum(polarization)
@@ -255,7 +293,17 @@ class EquivalentCircuitBattery:
         throughput = old.charge_throughput_c + abs(current) * dt
         if not np.isfinite([terminal_v, energy, heat_total, elapsed, throughput, *polarization]).all():
             raise ModelValidityError("battery arithmetic overflow; state has not been changed")
-        self._state = BatteryState(elapsed, soc, ocv, float(terminal_v), current,
-            tuple(polarization), float(energy), float(heat_total), throughput,
-            temperature, self._flags(soc, terminal_v, temperature))
+        self._state = BatteryState(
+            elapsed,
+            soc,
+            ocv,
+            float(terminal_v),
+            current,
+            tuple(polarization),
+            float(energy),
+            float(heat_total),
+            throughput,
+            temperature,
+            self._flags(soc, terminal_v, temperature),
+        )
         return self._state

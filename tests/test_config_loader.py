@@ -1,4 +1,5 @@
 """YAML composition (extends), kind-aware merging and dotted overrides."""
+
 import pytest
 
 from isaac_drone.config import (
@@ -45,8 +46,10 @@ def test_extends_resolves_relative_paths_and_rejects_cycles(tmp_path):
 
 
 def test_overrides_parse_yaml_values_and_validate_the_result():
-    config = load_config(HELIX_CONFIG, overrides=["controller.position_kp=[10, 10, 6]", "trajectory.turns=2.5",
-                                                   "limits.max_acceleration_m_s2=null"])
+    config = load_config(
+        HELIX_CONFIG,
+        overrides=["controller.position_kp=[10, 10, 6]", "trajectory.turns=2.5", "limits.max_acceleration_m_s2=null"],
+    )
     assert config["controller"]["position_kp"] == [10, 10, 6]
     assert config["trajectory"]["turns"] == 2.5 and config["limits"]["max_acceleration_m_s2"] is None
     switched = load_config(HELIX_CONFIG, overrides=["trajectory={kind: hold}", "completion=null"])

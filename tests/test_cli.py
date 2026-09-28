@@ -1,7 +1,7 @@
 """CLI parsing, recording selection and lazy simulator/encoder startup without Isaac Sim."""
+
 import builtins
 import json
-from pathlib import Path
 import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
@@ -9,12 +9,13 @@ from types import ModuleType, SimpleNamespace
 import pytest
 import yaml
 
-from isaac_drone.config import ConfigurationError, DEFAULT_RECORDING, load_config
+from isaac_drone.config import DEFAULT_RECORDING, ConfigurationError, load_config
 
 
 @pytest.fixture
 def cli():
     import isaac_drone.cli as module
+
     return module
 
 
@@ -36,11 +37,29 @@ def test_default_validation_reports_recording_disabled(cli, capsys):
 
 
 def test_record_video_and_format_overrides_are_reported(cli, capsys):
-    assert cli.main(["validate", "--record-video", "--video-fps", "100",
-                     "--video-width", "640", "--video-height", "480",
-                     "--video-cameras", "top", "follow"]) == 0
+    assert (
+        cli.main(
+            [
+                "validate",
+                "--record-video",
+                "--video-fps",
+                "100",
+                "--video-width",
+                "640",
+                "--video-height",
+                "480",
+                "--video-cameras",
+                "top",
+                "follow",
+            ]
+        )
+        == 0
+    )
     assert json.loads(capsys.readouterr().out)["recording"] == {
-        "enabled": True, "fps": 100, "width": 640, "height": 480,
+        "enabled": True,
+        "fps": 100,
+        "width": 640,
+        "height": 480,
         "cameras": ["top", "follow"],
     }
 
@@ -79,11 +98,14 @@ def test_validate_never_imports_simulator_or_video_encoder(cli, monkeypatch, cap
     assert json.loads(capsys.readouterr().out)["configuration"] == "valid"
 
 
-@pytest.mark.parametrize("extra,match", [
-    (["--video-fps", "0"], "recording.fps"),
-    (["--video-fps", "201"], "recording.fps.*physics frequency"),
-    (["--video-cameras", "follow", "follow"], "recording.cameras"),
-])
+@pytest.mark.parametrize(
+    "extra,match",
+    [
+        (["--video-fps", "0"], "recording.fps"),
+        (["--video-fps", "201"], "recording.fps.*physics frequency"),
+        (["--video-cameras", "follow", "follow"], "recording.cameras"),
+    ],
+)
 def test_invalid_video_overrides_are_rejected(cli, extra, match):
     with pytest.raises(ConfigurationError, match=match):
         cli.main(["validate", "--record-video", *extra])
@@ -127,20 +149,25 @@ def fake_launch(cli, monkeypatch):
         return 17
 
     import isaac_drone.sim.isaaclab.app as app
+
     monkeypatch.setattr(app, "run_simulation", run)
     state.recording = recording
     return state
 
 
-@pytest.mark.parametrize("yaml_enabled,extra,should_record,inspect_only", [
-    (False, [], False, False),
-    (False, ["--record-video"], True, False),
-    (True, [], True, False),
-    (True, ["--no-record-video"], False, False),
-    (True, None, False, True),
-])
+@pytest.mark.parametrize(
+    "yaml_enabled,extra,should_record,inspect_only",
+    [
+        (False, [], False, False),
+        (False, ["--record-video"], True, False),
+        (True, [], True, False),
+        (True, ["--no-record-video"], False, False),
+        (True, None, False, True),
+    ],
+)
 def test_encoder_and_camera_enablement_only_for_recorded_flight(
-        cli, fake_launch, recording_yaml, yaml_enabled, extra, should_record, inspect_only):
+    cli, fake_launch, recording_yaml, yaml_enabled, extra, should_record, inspect_only
+):
     config_args = ["--config", str(recording_yaml)] if yaml_enabled else []
     command = ["inspect"] if inspect_only else ["run", "--backend", "isaaclab", *extra]
     assert cli.main([*command, *config_args, "--headless"]) == 17

@@ -4,6 +4,7 @@ Physics gravity, contacts and rotor forces belong to the backend, and must not
 be duplicated here. All returned wrenches use body axes about the current CoM.
 A disabled model is absent, not a declaration of physically negligible effects.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -20,9 +21,9 @@ from isaac_drone.effects.wind import Gust, UniformGustWind, WindField
 
 class EffectModel(Protocol):
     """A plugin may be stateful, and is reset for each repeatable simulation."""
+
     def reset(self, seed: int | None = None) -> None: ...
-    def evaluate(self, state: VehicleState, dt_s: float,
-                 wind: WindField | None = None) -> Wrench: ...
+    def evaluate(self, state: VehicleState, dt_s: float, wind: WindField | None = None) -> Wrench: ...
 
 
 class ConstantWrench:
@@ -34,9 +35,18 @@ class ConstantWrench:
     same frame as force and is added to the moment of the force exactly once.
     Infinite end time is expressed as None, not an IEEE infinity.
     """
-    def __init__(self, *, force_n, torque_nm, frame: str,
-                 start_time_s: float, end_time_s: float | None,
-                 application_point_b_m=None, application_point_w_m=None):
+
+    def __init__(
+        self,
+        *,
+        force_n,
+        torque_nm,
+        frame: str,
+        start_time_s: float,
+        end_time_s: float | None,
+        application_point_b_m=None,
+        application_point_w_m=None,
+    ):
         if frame not in ("body", "world"):
             raise ValueError("constant wrench frame must be 'body' or 'world'")
         finite_scalar(start_time_s, "start_time_s")
@@ -53,16 +63,21 @@ class ConstantWrench:
         self.frame = frame
         self.start = float(start_time_s)
         self.end = end_time_s
-        self.point_b = None if application_point_b_m is None else finite_array(
-            application_point_b_m, (3,), "application_point_b_m")
-        self.point_w = None if application_point_w_m is None else finite_array(
-            application_point_w_m, (3,), "application_point_w_m")
+        self.point_b = (
+            None
+            if application_point_b_m is None
+            else finite_array(application_point_b_m, (3,), "application_point_b_m")
+        )
+        self.point_w = (
+            None
+            if application_point_w_m is None
+            else finite_array(application_point_w_m, (3,), "application_point_w_m")
+        )
 
     def reset(self, seed: int | None = None) -> None:
         """Stateless model."""
 
-    def evaluate(self, state: VehicleState, dt_s: float,
-                 wind: WindField | None = None) -> Wrench:
+    def evaluate(self, state: VehicleState, dt_s: float, wind: WindField | None = None) -> Wrench:
         positive_dt(dt_s)
         if state.time_s < self.start or (self.end is not None and state.time_s >= self.end):
             return Wrench.zero()
@@ -182,9 +197,12 @@ def _validate_optional_disturbance(item: Mapping) -> None:
         _optional_array(item, key, (3,))
     for key in ("start_time_s", "end_time_s"):
         _optional_time(item, key)
-    if item.get("start_time_s") is not None and item.get("end_time_s") is not None:
-        if item["end_time_s"] <= item["start_time_s"]:
-            raise ValueError("end_time_s must exceed start_time_s")
+    if (
+        item.get("start_time_s") is not None
+        and item.get("end_time_s") is not None
+        and item["end_time_s"] <= item["start_time_s"]
+    ):
+        raise ValueError("end_time_s must exceed start_time_s")
     if item.get("application_point_b_m") is not None and item.get("application_point_w_m") is not None:
         raise ValueError("specify at most one application point frame")
 
@@ -195,17 +213,39 @@ def build_effects(config: Mapping) -> EffectsPipeline:
     _keys(config, {"wind", "aerodynamic", "disturbances"}, "effects")
     wind_config = _section(_required(config, "wind", "effects"), "wind")
     aero_config = _section(_required(config, "aerodynamic", "effects"), "aerodynamic")
-    _keys(wind_config, {"enabled", "model", "velocity_w_m_s", "spatial_gradient_per_s",
-                        "reference_position_w_m", "gusts", "turbulence"}, "wind")
-    _keys(aero_config, {"enabled", "linear_drag_b_kg_s", "quadratic_drag_b_kg_m",
-                        "angular_linear_drag_b_nm_s", "center_of_pressure_b_m"}, "aerodynamic")
+    _keys(
+        wind_config,
+        {
+            "enabled",
+            "model",
+            "velocity_w_m_s",
+            "spatial_gradient_per_s",
+            "reference_position_w_m",
+            "gusts",
+            "turbulence",
+        },
+        "wind",
+    )
+    _keys(
+        aero_config,
+        {
+            "enabled",
+            "linear_drag_b_kg_s",
+            "quadratic_drag_b_kg_m",
+            "angular_linear_drag_b_nm_s",
+            "center_of_pressure_b_m",
+        },
+        "aerodynamic",
+    )
     _validate_optional_wind(wind_config)
     for key in ("linear_drag_b_kg_s", "angular_linear_drag_b_nm_s"):
         if aero_config.get(key) is not None:
             dissipative_matrix(aero_config[key], key)
     for key in ("quadratic_drag_b_kg_m", "center_of_pressure_b_m"):
         _optional_array(aero_config, key, (3,))
-    if aero_config.get("quadratic_drag_b_kg_m") is not None and np.any(np.asarray(aero_config["quadratic_drag_b_kg_m"]) < 0):
+    if aero_config.get("quadratic_drag_b_kg_m") is not None and np.any(
+        np.asarray(aero_config["quadratic_drag_b_kg_m"]) < 0
+    ):
         raise ValueError("quadratic_drag_b_kg_m must be nonnegative")
     wind = None
     if _enabled(wind_config, "wind"):
@@ -218,32 +258,49 @@ def build_effects(config: Mapping) -> EffectsPipeline:
         for item in gust_configs:
             item = _section(item, "gust")
             _keys(item, {"start_time_s", "duration_s", "delta_velocity_w_m_s"}, "gust")
-            gusts.append(Gust(*(_required(item, key, "gust") for key in (
-                "start_time_s", "duration_s", "delta_velocity_w_m_s"))))
+            gusts.append(
+                Gust(*(_required(item, key, "gust") for key in ("start_time_s", "duration_s", "delta_velocity_w_m_s")))
+            )
         turbulence = _section(_required(wind_config, "turbulence", "wind"), "turbulence")
         _keys(turbulence, {"enabled", "time_constant_s", "stationary_std_w_m_s"}, "turbulence")
         tau = std = None
         if _enabled(turbulence, "turbulence"):
             tau = _required(turbulence, "time_constant_s", "turbulence")
             std = _required(turbulence, "stationary_std_w_m_s", "turbulence")
-        wind = UniformGustWind(_required(wind_config, "velocity_w_m_s", "wind"), gusts=gusts,
+        wind = UniformGustWind(
+            _required(wind_config, "velocity_w_m_s", "wind"),
+            gusts=gusts,
             spatial_gradient_per_s=wind_config.get("spatial_gradient_per_s"),
             reference_position_w_m=wind_config.get("reference_position_w_m"),
-            turbulence_time_constant_s=tau, turbulence_std_w_m_s=std)
+            turbulence_time_constant_s=tau,
+            turbulence_std_w_m_s=std,
+        )
     effects = []
     if _enabled(aero_config, "aerodynamic"):
         if wind is None:
             raise ValueError("enabled aerodynamics requires an explicit wind field, including explicit still air")
-        keys = ("linear_drag_b_kg_s", "quadratic_drag_b_kg_m",
-                "angular_linear_drag_b_nm_s", "center_of_pressure_b_m")
+        keys = ("linear_drag_b_kg_s", "quadratic_drag_b_kg_m", "angular_linear_drag_b_nm_s", "center_of_pressure_b_m")
         effects.append(BodyDrag(**{key: _required(aero_config, key, "aerodynamic") for key in keys}))
     disturbances = _required(config, "disturbances", "effects")
     if not isinstance(disturbances, (list, tuple)):
         raise ValueError("effects.disturbances must be a list")
     for item in disturbances:
         item = _section(item, "disturbance")
-        _keys(item, {"enabled", "model", "force_n", "torque_nm", "frame", "start_time_s",
-                     "end_time_s", "application_point_b_m", "application_point_w_m"}, "disturbance")
+        _keys(
+            item,
+            {
+                "enabled",
+                "model",
+                "force_n",
+                "torque_nm",
+                "frame",
+                "start_time_s",
+                "end_time_s",
+                "application_point_b_m",
+                "application_point_w_m",
+            },
+            "disturbance",
+        )
         _validate_optional_disturbance(item)
         if not _enabled(item, "disturbance"):
             continue
@@ -254,7 +311,12 @@ def build_effects(config: Mapping) -> EffectsPipeline:
         if "application_point_b_m" not in item and "application_point_w_m" not in item:
             raise ValueError("constant_wrench requires an explicit application point (None means CoM)")
         keys = ("force_n", "torque_nm", "frame", "start_time_s")
-        effects.append(ConstantWrench(**{key: _required(item, key, "disturbance") for key in keys},
-            end_time_s=item["end_time_s"], application_point_b_m=item.get("application_point_b_m"),
-            application_point_w_m=item.get("application_point_w_m")))
+        effects.append(
+            ConstantWrench(
+                **{key: _required(item, key, "disturbance") for key in keys},
+                end_time_s=item["end_time_s"],
+                application_point_b_m=item.get("application_point_b_m"),
+                application_point_w_m=item.get("application_point_w_m"),
+            )
+        )
     return EffectsPipeline(effects, wind)

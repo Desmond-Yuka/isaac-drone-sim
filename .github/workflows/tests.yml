@@ -19,4 +19,5 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install -e '.[dev]'
       - run: ruff check .
+      - run: ruff format --check isaac_drone tests
       - run: python -m pytest -q

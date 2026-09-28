@@ -10,6 +10,7 @@ upstream source whenever an Isaac Lab checkout is available.
 The functions are written as unbound methods: ``self`` must provide
 ``cfg.dt`` [s] and ``max_rate`` (elementwise rate clamp).
 """
+
 from __future__ import annotations
 
 import ast

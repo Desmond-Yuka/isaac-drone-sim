@@ -19,9 +19,7 @@ def hat(vector: np.ndarray) -> np.ndarray:
 def vee(skew_matrix: np.ndarray) -> np.ndarray:
     """Axial vector of the skew part, ignoring symmetric roundoff."""
     matrix = finite_array(skew_matrix, (3, 3), "skew_matrix")
-    return 0.5 * np.array(
-        [matrix[2, 1] - matrix[1, 2], matrix[0, 2] - matrix[2, 0], matrix[1, 0] - matrix[0, 1]]
-    )
+    return 0.5 * np.array([matrix[2, 1] - matrix[1, 2], matrix[0, 2] - matrix[2, 0], matrix[1, 0] - matrix[0, 1]])
 
 
 def quaternion_to_matrix(quaternion_wxyz: np.ndarray) -> np.ndarray:
@@ -32,9 +30,11 @@ def quaternion_to_matrix(quaternion_wxyz: np.ndarray) -> np.ndarray:
         raise ValueError(f"quaternion_wxyz must have unit norm; got {norm}")
     w, x, y, z = q / norm
     return np.array(
-        [[1 - 2 * (y*y + z*z), 2 * (x*y - z*w), 2 * (x*z + y*w)],
-         [2 * (x*y + z*w), 1 - 2 * (x*x + z*z), 2 * (y*z - x*w)],
-         [2 * (x*z - y*w), 2 * (y*z + x*w), 1 - 2 * (x*x + y*y)]]
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
     )
 
 
@@ -62,8 +62,9 @@ def matrix_to_quaternion(rotation: np.ndarray) -> np.ndarray:
 def rotation_to_rpy(rotation: np.ndarray) -> np.ndarray:
     """Roll, pitch, yaw [rad] of a body-to-world rotation, Z-Y-X (yaw first) convention."""
     m = finite_array(rotation, (3, 3), "rotation")
-    return np.array([np.arctan2(m[2, 1], m[2, 2]), np.arcsin(np.clip(-m[2, 0], -1.0, 1.0)),
-                     np.arctan2(m[1, 0], m[0, 0])])
+    return np.array(
+        [np.arctan2(m[2, 1], m[2, 2]), np.arcsin(np.clip(-m[2, 0], -1.0, 1.0)), np.arctan2(m[1, 0], m[0, 0])]
+    )
 
 
 def wrap_angle(angle):

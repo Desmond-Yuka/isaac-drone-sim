@@ -56,8 +56,14 @@ class GeometricController:
         if not isinstance(config, Mapping):
             raise ValueError("control config must be a mapping")
         required = (
-            "position_kp", "velocity_kd", "position_ki", "integral_limit_m_s",
-            "attitude_kp", "angular_rate_kd", "max_tilt_rad", "max_yaw_rate_rad_s",
+            "position_kp",
+            "velocity_kd",
+            "position_ki",
+            "integral_limit_m_s",
+            "attitude_kp",
+            "angular_rate_kd",
+            "max_tilt_rad",
+            "max_yaw_rate_rad_s",
             "max_acceleration_m_s2",
         )
         missing = set(required) - set(config)
@@ -129,8 +135,11 @@ class GeometricController:
         return self._desired_angular_acceleration_d.copy()
 
     def diagnostics(self) -> ControllerDiagnostics:
-        return ControllerDiagnostics(self.desired_rotation_w, self.desired_angular_velocity_d,
-                                     {"force_derivative_source": self.force_derivative_source})
+        return ControllerDiagnostics(
+            self.desired_rotation_w,
+            self.desired_angular_velocity_d,
+            {"force_derivative_source": self.force_derivative_source},
+        )
 
     def notify_allocation(self, result: AllocationResult) -> None:
         """Suspend integral growth when allocation cannot achieve the command.
@@ -146,8 +155,9 @@ class GeometricController:
             self._integral[growing] = self._integral_before_step[growing]
 
     def _limited_force(self, acceleration: np.ndarray) -> tuple[np.ndarray, bool]:
-        return limited_thrust_vector(acceleration, self.mass_kg, self.gravity_w, self.max_tilt_rad,
-                                     self.max_acceleration_m_s2)
+        return limited_thrust_vector(
+            acceleration, self.mass_kg, self.gravity_w, self.max_tilt_rad, self.max_acceleration_m_s2
+        )
 
     def _force_derivatives(self, force: np.ndarray, dt: float, history=None) -> tuple[np.ndarray, np.ndarray]:
         history = self._force_history if history is None else history
@@ -208,7 +218,12 @@ class GeometricController:
             dforce, ddforce = self._force_derivatives(force, dt)
             self.force_derivative_source = "numerical_total_force"
         desired, omega_desired, alpha_desired = desired_attitude_kinematics(
-            force, dforce, ddforce, yaw, yaw_rate, yaw_acceleration,
+            force,
+            dforce,
+            ddforce,
+            yaw,
+            yaw_rate,
+            yaw_acceleration,
             self._desired_rotation_w if self._has_computed else rotation,
         )
         relative = rotation.T @ desired
@@ -217,7 +232,8 @@ class GeometricController:
         rate_error = omega - desired_rate_current_body
         feedforward_acceleration = relative @ alpha_desired - np.cross(omega, desired_rate_current_body)
         torque = (
-            -self.attitude_kp * attitude_error - self.angular_rate_kd * rate_error
+            -self.attitude_kp * attitude_error
+            - self.angular_rate_kd * rate_error
             + np.cross(omega, self.inertia_com_b @ omega)
             + self.inertia_com_b @ feedforward_acceleration
         )
@@ -263,6 +279,10 @@ class GeometricGains:
 @CONTROLLERS.register("geometric", params=GeometricGains)
 def build_geometric(params: GeometricGains, *, vehicle: VehicleModel, limits: FlightLimits) -> GeometricController:
     """Position PID + Lee SO(3) attitude control with jerk/snap and full-inertia feedforward."""
-    config = {**params_to_dict(params), "max_tilt_rad": limits.max_tilt_rad,
-              "max_yaw_rate_rad_s": limits.max_yaw_rate_rad_s, "max_acceleration_m_s2": limits.max_acceleration_m_s2}
+    config = {
+        **params_to_dict(params),
+        "max_tilt_rad": limits.max_tilt_rad,
+        "max_yaw_rate_rad_s": limits.max_yaw_rate_rad_s,
+        "max_acceleration_m_s2": limits.max_acceleration_m_s2,
+    }
     return GeometricController(config, vehicle.mass_properties, vehicle.gravity_w)

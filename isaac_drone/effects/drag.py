@@ -1,4 +1,5 @@
 """Identifiable lumped drag models with explicit coefficient/frame conventions."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -23,8 +24,10 @@ class BodyDrag:
     from CoM. Angular drag uses inertial angular velocity; atmospheric vorticity
     coupling requires a separately calibrated plugin.
     """
-    def __init__(self, *, linear_drag_b_kg_s, quadratic_drag_b_kg_m,
-                 angular_linear_drag_b_nm_s, center_of_pressure_b_m):
+
+    def __init__(
+        self, *, linear_drag_b_kg_s, quadratic_drag_b_kg_m, angular_linear_drag_b_nm_s, center_of_pressure_b_m
+    ):
         self.linear = dissipative_matrix(linear_drag_b_kg_s, "linear_drag_b_kg_s")
         self.quadratic = finite_array(quadratic_drag_b_kg_m, (3,), "quadratic_drag_b_kg_m")
         if np.any(self.quadratic < 0):
@@ -35,16 +38,14 @@ class BodyDrag:
     def reset(self, seed: int | None = None) -> None:
         """Stateless model; provided for the effect plugin contract."""
 
-    def evaluate(self, state: VehicleState, dt_s: float,
-                 wind: WindField | None = None) -> Wrench:
+    def evaluate(self, state: VehicleState, dt_s: float, wind: WindField | None = None) -> Wrench:
         positive_dt(dt_s)
         rotation = body_to_world(state.quaternion_wxyz)
         point_w = state.position_w + rotation @ self.lever_b
         if wind is None:
             raise ValueError("BodyDrag requires an explicit WindField; still air must be explicitly configured")
         wind_w = finite_array(wind.velocity_w(point_w, state.time_s), (3,), "wind velocity")
-        point_velocity_b = rotation.T @ state.linear_velocity_w + np.cross(
-            state.angular_velocity_b, self.lever_b)
+        point_velocity_b = rotation.T @ state.linear_velocity_w + np.cross(state.angular_velocity_b, self.lever_b)
         relative_b = point_velocity_b - rotation.T @ wind_w
         force = -self.linear @ relative_b - self.quadratic * np.abs(relative_b) * relative_b
         torque = np.cross(self.lever_b, force) - self.angular @ state.angular_velocity_b
