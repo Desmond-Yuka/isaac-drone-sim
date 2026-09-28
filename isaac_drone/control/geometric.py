@@ -8,14 +8,17 @@ act outside this module and are observed through state/allocation feedback.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 import numpy as np
 
+from isaac_drone.core.params import Vec3, params_to_dict
 from isaac_drone.core.rotations import desired_attitude_kinematics, quaternion_to_matrix, vee
 from isaac_drone.core.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
 from isaac_drone.core.validation import finite_array, finite_scalar
 
 from .allocation import AllocationResult
+from .base import CONTROLLERS, ControllerDiagnostics, FlightLimits, VehicleModel
 
 
 class GeometricController:
@@ -45,6 +48,8 @@ class GeometricController:
     not a slew-rate limiter for a discontinuous yaw angle reference.
     Call notify_allocation after every allocation to prevent integral windup.
     """
+
+    output = "wrench"
 
     def __init__(self, config: dict, mass_properties: MassProperties, gravity_w: np.ndarray):
         if not isinstance(config, Mapping):
@@ -121,6 +126,10 @@ class GeometricController:
     @property
     def desired_angular_acceleration_d(self) -> np.ndarray:
         return self._desired_angular_acceleration_d.copy()
+
+    def diagnostics(self) -> ControllerDiagnostics:
+        return ControllerDiagnostics(self.desired_rotation_w, self.desired_angular_velocity_d,
+                                     {"force_derivative_source": self.force_derivative_source})
 
     def notify_allocation(self, result: AllocationResult) -> None:
         """Suspend integral growth when allocation cannot achieve the command.
@@ -242,3 +251,32 @@ class GeometricController:
         self._last_time = time
         self._has_computed = True
         return wrench
+
+
+@dataclass(frozen=True)
+class GeometricGains:
+    """``controller: {kind: geometric}`` gains; limits come from the shared ``limits:`` section.
+
+    position_kp [s^-2], velocity_kd [s^-1], position_ki [s^-3] (0 disables an axis),
+    integral_limit_m_s [m s], attitude_kp [N m/rad], angular_rate_kd [N m s/rad].
+    """
+
+    position_kp: Vec3
+    velocity_kd: Vec3
+    position_ki: Vec3
+    integral_limit_m_s: Vec3
+    attitude_kp: Vec3
+    angular_rate_kd: Vec3
+
+    def __post_init__(self):
+        for name, value in params_to_dict(self).items():
+            if min(value) < 0:
+                raise ValueError(f"{name} must be nonnegative")
+
+
+@CONTROLLERS.register("geometric", params=GeometricGains)
+def build_geometric(params: GeometricGains, *, vehicle: VehicleModel, limits: FlightLimits) -> GeometricController:
+    """Position PID + Lee SO(3) attitude control with jerk/snap and full-inertia feedforward."""
+    config = {**params_to_dict(params), "max_tilt_rad": limits.max_tilt_rad,
+              "max_yaw_rate_rad_s": limits.max_yaw_rate_rad_s, "max_acceleration_m_s2": limits.max_acceleration_m_s2}
+    return GeometricController(config, vehicle.mass_properties, vehicle.gravity_w)

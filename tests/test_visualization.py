@@ -2,20 +2,18 @@
 import numpy as np
 import pytest
 
-from isaac_drone.trajectories.helix import SpiralTrajectory
 from isaac_drone.core.types import VehicleState
-from isaac_drone.viz.overlay import (
-    PathOverlay, PathTrail, dash_segments, reference_path_points, resample_by_arc_length,
-)
+from isaac_drone.trajectories import TRAJECTORIES
+from isaac_drone.viz.overlay import PathOverlay, PathTrail, dash_segments, resample_by_arc_length
 
 
 def helix():
-    trajectory = SpiralTrajectory({
-        "start_delay_s": 2.0, "takeoff_height_m": 1.0, "takeoff_duration_s": 4.0,
-        "radius_m": 1.0, "turns": 2.0, "climb_height_m": 3.0, "spiral_duration_s": 24.0,
+    trajectory = TRAJECTORIES.build({
+        "kind": "helix", "takeoff_height_m": 1.0, "takeoff_duration_s": 4.0,
+        "radius_m": 1.0, "turns": 2.0, "climb_height_m": 3.0, "helix_duration_s": 24.0,
         "initial_phase_rad": 0.0, "yaw_mode": "fixed", "yaw_offset_rad": 0.0,
-        "initial_speed_tolerance_m_s": 1e-3, "initial_angular_speed_tolerance_rad_s": 1e-3,
-    })
+        "rest_speed_tolerance_m_s": 1e-3, "rest_angular_speed_tolerance_rad_s": 1e-3,
+    }, "trajectory")
     trajectory.reset(VehicleState(0.0, np.array([0.0, 0.0, 0.1]), np.array([1.0, 0, 0, 0]),
                                   np.zeros(3), np.zeros(3)))
     return trajectory
@@ -23,7 +21,7 @@ def helix():
 
 def test_reference_path_covers_takeoff_and_helix_to_the_endpoint():
     trajectory = helix()
-    points = reference_path_points(trajectory, 0.0, trajectory.mission_duration_s)
+    points = trajectory.path_points()
     np.testing.assert_allclose(points[0], [0.0, 0.0, 0.1])
     np.testing.assert_allclose(points[-1], trajectory.endpoint_position_w, atol=1e-12)
     center = np.array([-1.0, 0.0])
@@ -69,7 +67,7 @@ def test_usd_overlay_writes_curves_and_setpoint():
     stage = Usd.Stage.CreateInMemory()
     overlay = PathOverlay(stage)
     trajectory = helix()
-    overlay.set_reference(reference_path_points(trajectory, 0.0, trajectory.mission_duration_s))
+    overlay.set_reference(trajectory.path_points())
     overlay.update(np.array([[0, 0, .1], [0, 0, .2], [0, .1, .3]]), [1.0, 2.0, 3.0])
     target = UsdGeom.BasisCurves(stage.GetPrimAtPath("/World/Visuals/TargetPath"))
     counts = target.GetCurveVertexCountsAttr().Get()

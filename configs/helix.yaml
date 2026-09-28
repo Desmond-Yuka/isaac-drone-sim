@@ -1,0 +1,50 @@
+# 三维 helix 起飞任务：地面零转速起飞 → 原地垂直升高 → 恒定半径螺旋上升 → 终点悬停。
+# 继承 arl_robot_1.yaml，只写差异。时长填 null = 按实际推力包线规划最短时间。
+extends: arl_robot_1.yaml
+
+simulation:
+  duration_s: 20.0              # 规划后运动约 11 s（起转 2 s + 起飞 + 螺旋），其余时间在终点悬停
+
+vehicle:
+  initial_state:
+    pos: [0.0, 0.0, 1.0]        # 使用 XY；ground launch 按真实碰撞形状重新计算初始 Z
+    rps:                        # 地面起飞：所有电机从零速开始
+      back_left_prop: 0.0
+      back_right_prop: 0.0
+      front_left_prop: 0.0
+      front_right_prop: 0.0
+  launch:
+    from_ground: true
+    spin_up_s: 2.0              # 电机从零速平滑起转
+
+limits:
+  max_tilt_rad: 1.3962634015954636      # 80°：最快 helix 名义倾角约 68°，其余留给反馈
+  max_yaw_rate_rad_s: 6.283185307179586  # tangent 机头巡航偏航速率约 5 rad/s
+
+controller:
+  # 高速 helix：电机滞后(τ≤80 ms)使推力跟不上时靠反馈追回；CPU 合成对象上调到阻尼比≈1，尚未验飞
+  position_kp: [12.0, 12.0, 8.0] # [s^-2]
+  velocity_kd: [7.0, 7.0, 5.0]   # [s^-1]
+
+trajectory:
+  kind: helix
+  takeoff_height_m: 1.0         # 先在原地垂直起飞，相对初始真实质心
+  takeoff_duration_s: null      # null = 最短时间；填数字 = 固定时长九次多项式
+  radius_m: 1.0                 # 恒定半径 [m]
+  turns: 5.0                    # 正数从 +Z 看逆时针；允许负数/非整数
+  climb_height_m: 5.0           # 螺旋段增高 [m]；不是整个任务最终绝对 Z
+  helix_duration_s: null        # null = 最短时间：加速—匀速巡航—减速
+  initial_phase_rad: -1.5707963267948966  # -π/2：切向机头与初始机头一致，起飞时不用转头
+  yaw_mode: tangent             # fixed 或 tangent；高速时 tangent 四桨推力均衡，能用满推力
+  yaw_offset_rad: 0.0
+  thrust_utilization: 0.85      # 名义每桨推力限制在推力范围的 15%~85%（转速最高约 92%），两端余量留给反馈
+  rest_speed_tolerance_m_s: 0.001            # reset 时要求静止
+  rest_angular_speed_tolerance_rad_s: 0.001
+
+completion:
+  position_tolerance_m: 0.10
+  speed_tolerance_m_s: 0.10
+  yaw_tolerance_rad: 0.10
+  angular_speed_tolerance_rad_s: 0.10
+  dwell_time_s: 2.0             # 连续实际满足条件才判定悬停成功
+  max_hold_time_s: 10.0

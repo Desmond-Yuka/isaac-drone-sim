@@ -14,14 +14,6 @@ TARGET_COLOR = (0.10, 0.85, 0.30)
 FLOWN_COLOR = (1.00, 0.35, 0.05)
 
 
-def reference_path_points(trajectory, start_s: float, end_s: float, step_s: float = 0.005) -> np.ndarray:
-    """Sample reference CoM positions over [start_s, end_s] at a fixed time step."""
-    if not (np.isfinite(start_s) and np.isfinite(end_s) and np.isfinite(step_s)) or step_s <= 0 or end_s < start_s:
-        raise ValueError("reference path needs finite start <= end and a positive step")
-    times = np.append(np.arange(start_s, end_s, step_s), end_s)
-    return np.array([trajectory.sample(float(time)).position_w for time in times], dtype=float)
-
-
 def resample_by_arc_length(points, spacing_m: float) -> np.ndarray:
     """Return points evenly spaced along the polyline; stationary samples are dropped."""
     points = np.asarray(points, dtype=float)

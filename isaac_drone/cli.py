@@ -18,6 +18,9 @@ CAMERAS = ("overview", "follow", "top")
 
 def _config_arguments(parser):
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Experiment YAML (default: %(default)s)")
+    parser.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY.PATH=VALUE",
+                        help="Override one config value (YAML syntax), e.g. --set controller.position_kp=[10,10,6]; "
+                             "repeatable")
     parser.add_argument("--duration", type=float, help="Override simulation.duration_s [s]")
 
 
@@ -79,7 +82,7 @@ def build_parser():
 
 def configure(args) -> dict:
     """Load the experiment config and apply command-line overrides, then validate again."""
-    config = load_config(args.config)
+    config = load_config(args.config, overrides=args.overrides)
     if args.duration is not None:
         config["simulation"]["duration_s"] = args.duration
     if getattr(args, "record_video", None) is not None:

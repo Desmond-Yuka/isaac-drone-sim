@@ -232,13 +232,12 @@ def run_simulation(config: dict, *, figures: bool = True, log=print, log_root=No
     backend = SyntheticBackend(config)
     loop = MotionControlLoop(config, backend)
     loop.reset()
-    if loop.feasibility:
-        from isaac_drone.trajectories.min_time import timing_summary
-        log(f"Trajectory plan: {timing_summary(loop.feasibility)}")
+    if loop.plan_summary():
+        log(f"Trajectory plan: {loop.plan_summary()}")
     description = backend.describe()
     metadata = {"backend": description, "backend_kind": "synthetic", "state_source": "simulation_truth",
                 "motor_model": "RPS commands through NativeRpsActuator with transcribed native integrators",
-                "trajectory_feasibility": loop.feasibility, "limitations": description["limitations"]}
+                **loop.run_metadata(), "limitations": description["limitations"]}
     hooks = [*hooks, *([FiguresHook(log)] if figures else [])]
     return run_experiment(loop, SyntheticDriver(backend), config, metadata=metadata, hooks=hooks,
                           log_root=log_root, log=log)

@@ -1,5 +1,10 @@
-"""Strict YAML loading without importing the simulator. Native fields are
-validated against the installed Isaac Lab classes by the backend builder.
+"""Experiment configuration schema (``schema_version: 2``) without importing the simulator.
+
+Sections: simulation, recording (optional), vehicle, limits, controller,
+allocation, trajectory, completion, effects, power, scene, logging. Plugin
+sections (``controller``, ``trajectory``) are validated by the parameter
+dataclass registered for their ``kind``. Native Isaac Lab fields are validated
+against the installed classes by the backend builder.
 """
 from __future__ import annotations
 
@@ -9,38 +14,24 @@ from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
-import yaml
 
-from isaac_drone.core.validation import finite_array
+from isaac_drone.control import CONTROLLERS, FlightLimits
+from isaac_drone.core.params import parse_params
+from isaac_drone.core.validation import ConfigurationError, finite_array
+from isaac_drone.trajectories import TRAJECTORIES, CompletionParams
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = REPO_ROOT / "configs" / "arl_robot_1.yaml"
-HELIX_CONFIG = REPO_ROOT / "configs" / "arl_robot_1_helix.yaml"
+from .loader import apply_override, load_yaml_tree
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_DIR = REPO_ROOT / "configs"
+DEFAULT_CONFIG = CONFIG_DIR / "arl_robot_1.yaml"
+HELIX_CONFIG = CONFIG_DIR / "helix.yaml"
+SCHEMA_VERSION = 2
 DEFAULT_RECORDING = {"enabled": False, "fps": 60, "width": 1280, "height": 720,
                      "cameras": ["overview", "follow", "top"]}
-
-
-class ConfigurationError(ValueError):
-    """Invalid or incomplete explicitly selected configuration."""
-
-
-class _UniqueLoader(yaml.SafeLoader):
-    pass
-
-
-def _unique_mapping(loader, node, deep=False):
-    result = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if not isinstance(key, str):
-            raise ConfigurationError("YAML keys must be strings")
-        if key in result:
-            raise ConfigurationError(f"Duplicate YAML key: {key}")
-        result[key] = loader.construct_object(value_node, deep=deep)
-    return result
-
-
-_UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _unique_mapping)
+ROTOR_ORDER = ["back_left_prop", "back_right_prop", "front_left_prop", "front_right_prop"]
+_SECTIONS = {"schema_version", "simulation", "vehicle", "limits", "controller", "allocation", "trajectory",
+             "completion", "effects", "power", "scene", "logging"}
 
 
 def _keys(data, allowed, required, path):
@@ -88,26 +79,42 @@ def _finite_tree(value, path="config"):
         raise ConfigurationError(f"{path}: NaN and infinity are not allowed")
 
 
-def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
-    with Path(path).expanduser().open(encoding="utf-8") as stream:
-        try:
-            config = yaml.load(stream, Loader=_UniqueLoader)
-        except yaml.YAMLError as error:
-            raise ConfigurationError(str(error)) from error
-    validate_config(config)
+def load_config(path: str | Path = DEFAULT_CONFIG, overrides=()) -> dict:
+    """Load a YAML experiment (resolving ``extends``), apply ``key.path=value`` overrides, validate."""
+    config = load_yaml_tree(path)
+    for assignment in overrides:
+        apply_override(config, assignment)
     config.setdefault("recording", deepcopy(DEFAULT_RECORDING))
+    validate_config(config)
     return deepcopy(config)
 
 
 def validate_config(config: dict) -> None:
-    top = {"schema_version", "simulation", "vehicle", "control", "allocation", "effects", "power",
-           "scene", "trajectory", "logging"}
-    _keys(config, top | {"recording"}, top, "config")
-    if type(config["schema_version"]) is not int or config["schema_version"] != 1:
-        raise ConfigurationError("Only schema_version: 1 is supported")
+    _keys(config, _SECTIONS | {"recording"}, _SECTIONS, "config")
+    if type(config["schema_version"]) is not int or config["schema_version"] != SCHEMA_VERSION:
+        raise ConfigurationError(f"Only schema_version: {SCHEMA_VERSION} is supported; "
+                                 "see docs/configuration.md for the layout")
     _finite_tree(config)
-    sim = config["simulation"]
-    fields = {"dt", "control_decimation", "render_interval", "device", "gravity", "seed", "duration_s", "native_overrides"}
+    _validate_simulation(config["simulation"])
+    _validate_recording(config.get("recording", DEFAULT_RECORDING), config["simulation"]["dt"])
+    _validate_scene(config["scene"])
+    _validate_vehicle(config["vehicle"], config["scene"])
+    FlightLimits.from_config(config["limits"])
+    CONTROLLERS.parse(config["controller"], "controller")
+    _validate_allocation(config["allocation"])
+    TRAJECTORIES.parse(config["trajectory"], "trajectory")
+    if config["completion"] is not None:
+        parse_params(CompletionParams, config["completion"], "completion")
+    _validate_logging(config["logging"])
+    from isaac_drone.effects import build_effects
+    from isaac_drone.power import validate_power_config
+    build_effects(config["effects"])
+    validate_power_config(config["power"])
+
+
+def _validate_simulation(sim):
+    fields = {"dt", "control_decimation", "render_interval", "device", "gravity", "seed", "duration_s",
+              "native_overrides"}
     _keys(sim, fields, fields, "simulation")
     _number(sim["dt"], "simulation.dt", positive=True)
     _number(sim["duration_s"], "simulation.duration_s", positive=True)
@@ -123,7 +130,9 @@ def validate_config(config: dict) -> None:
         raise ConfigurationError("simulation.native_overrides must be a mapping")
     if {"dt", "gravity", "device", "render_interval", "use_newton_actuators"} & sim["native_overrides"].keys():
         raise ConfigurationError("native overrides cannot shadow timing/gravity/device or native actuator execution")
-    recording = config.get("recording", DEFAULT_RECORDING)
+
+
+def _validate_recording(recording, dt):
     fields = {"enabled", "fps", "width", "height", "cameras"}
     _keys(recording, fields, fields, "recording")
     _boolean(recording["enabled"], "recording.enabled")
@@ -132,14 +141,16 @@ def validate_config(config: dict) -> None:
     for field in ("width", "height"):
         if recording[field] % 2:
             raise ConfigurationError(f"recording.{field} must be even for H.264 video")
-    if recording["enabled"] and recording["fps"] > 1.0 / sim["dt"]:
+    if recording["enabled"] and recording["fps"] > 1.0 / dt:
         raise ConfigurationError("recording.fps cannot exceed the simulation physics frequency (1 / simulation.dt)")
     cameras = recording["cameras"]
     if (not isinstance(cameras, list) or not cameras
             or any(not isinstance(name, str) or name not in {"overview", "follow", "top"} for name in cameras)
             or len(cameras) != len(set(cameras))):
         raise ConfigurationError("recording.cameras must be a nonempty list of unique overview/follow/top names")
-    vehicle = config["vehicle"]
+
+
+def _validate_vehicle(vehicle, scene):
     fields = {"name", "asset_path", "prim_path", "geometry_tolerance_m", "allocation_matrix", "rotor_directions",
               "rotor_direction_source", "thrusters", "initial_state", "launch", "native_overrides", "usd_overrides"}
     _keys(vehicle, fields, fields, "vehicle")
@@ -169,13 +180,39 @@ def validate_config(config: dict) -> None:
         raise ConfigurationError("vehicle.usd_overrides must be a list")
     for override in vehicle["usd_overrides"]:
         _keys(override, {"prim_path", "attribute", "value"}, {"prim_path", "attribute", "value"}, "usd_overrides[]")
-    thrusters = vehicle["thrusters"]
+    _validate_thrusters(vehicle["thrusters"])
+    initial = vehicle["initial_state"]
+    fields = {"pos", "quaternion_wxyz", "lin_vel", "ang_vel", "rps"}
+    _keys(initial, fields, fields, "vehicle.initial_state")
+    for field in ("pos", "lin_vel", "ang_vel"):
+        _array(initial[field], (3,), f"vehicle.initial_state.{field}")
+    quat = _array(initial["quaternion_wxyz"], (4,), "initial quaternion")
+    if not np.isclose(np.linalg.norm(quat), 1.0, atol=1e-8):
+        raise ConfigurationError("initial quaternion_wxyz must be normalized")
+    _keys(initial["rps"], ROTOR_ORDER, ROTOR_ORDER, "vehicle.initial_state.rps")
+    for name, rps in initial["rps"].items():
+        _number(rps, f"initial_state.rps.{name}", nonnegative=True)
+    launch = vehicle["launch"]
+    fields = {"from_ground", "ground_z_m", "clearance_m", "spin_up_s"}
+    _keys(launch, fields, fields, "vehicle.launch")
+    _boolean(launch["from_ground"], "vehicle.launch.from_ground")
+    _number(launch["ground_z_m"], "vehicle.launch.ground_z_m")
+    _number(launch["clearance_m"], "vehicle.launch.clearance_m", nonnegative=True)
+    _number(launch["spin_up_s"], "vehicle.launch.spin_up_s", nonnegative=True)
+    if launch["from_ground"]:
+        if not scene["ground"]["enabled"]:
+            raise ConfigurationError("Ground launch requires the configured physical ground plane")
+        if any(initial["rps"].values()) or np.any(initial["lin_vel"]) or np.any(initial["ang_vel"]):
+            raise ConfigurationError("Ground launch requires initially stopped motors and zero initial velocities")
+        if launch["spin_up_s"] <= 0:
+            raise ConfigurationError("Ground launch requires a positive vehicle.launch.spin_up_s for motor spin-up")
+
+
+def _validate_thrusters(thrusters):
     fields = {"thruster_names_expr", "thrust_range", "thrust_const_range", "tau_inc_range", "tau_dec_range",
               "torque_to_thrust_ratio", "max_thrust_rate", "use_discrete_approximation", "integration_scheme"}
     _keys(thrusters, fields, fields, "vehicle.thrusters")
-    names = thrusters["thruster_names_expr"]
-    expected = ["back_left_prop", "back_right_prop", "front_left_prop", "front_right_prop"]
-    if names != expected:
+    if thrusters["thruster_names_expr"] != ROTOR_ORDER:
         raise ConfigurationError("ARL action order must be back_left, back_right, front_left, front_right")
     for field in ("thrust_range", "thrust_const_range", "tau_inc_range", "tau_dec_range"):
         bounds = _array(thrusters[field], (2,), f"vehicle.thrusters.{field}")
@@ -188,73 +225,20 @@ def validate_config(config: dict) -> None:
     _boolean(thrusters["use_discrete_approximation"], "use_discrete_approximation")
     if thrusters["integration_scheme"] not in ("rk4", "euler"):
         raise ConfigurationError("integration_scheme must be rk4 or euler")
-    initial = vehicle["initial_state"]
-    fields = {"pos", "quaternion_wxyz", "lin_vel", "ang_vel", "rps"}
-    _keys(initial, fields, fields, "vehicle.initial_state")
-    for field in ("pos", "lin_vel", "ang_vel"):
-        _array(initial[field], (3,), f"vehicle.initial_state.{field}")
-    quat = _array(initial["quaternion_wxyz"], (4,), "initial quaternion")
-    if not np.isclose(np.linalg.norm(quat), 1.0, atol=1e-8):
-        raise ConfigurationError("initial quaternion_wxyz must be normalized")
-    _keys(initial["rps"], expected, expected, "vehicle.initial_state.rps")
-    for name, rps in initial["rps"].items():
-        _number(rps, f"initial_state.rps.{name}", nonnegative=True)
-    launch = vehicle["launch"]
-    _keys(launch, {"from_ground", "ground_z_m", "clearance_m"}, {"from_ground", "ground_z_m", "clearance_m"}, "vehicle.launch")
-    _boolean(launch["from_ground"], "vehicle.launch.from_ground")
-    _number(launch["ground_z_m"], "vehicle.launch.ground_z_m")
-    _number(launch["clearance_m"], "vehicle.launch.clearance_m", nonnegative=True)
-    if launch["from_ground"]:
-        if not config["scene"]["ground"]["enabled"]:
-            raise ConfigurationError("Ground launch requires the configured physical ground plane")
-        if any(initial["rps"].values()) or np.any(initial["lin_vel"]) or np.any(initial["ang_vel"]):
-            raise ConfigurationError("Ground launch requires initially stopped motors and zero initial velocities")
-    control = config["control"]
-    vectors = {"position_kp", "velocity_kd", "position_ki", "integral_limit_m_s", "attitude_kp", "angular_rate_kd"}
-    fields = vectors | {"max_tilt_rad", "max_yaw_rate_rad_s", "max_acceleration_m_s2"}
-    _keys(control, fields, fields, "control")
-    for field in vectors:
-        if np.any(_array(control[field], (3,), f"control.{field}") < 0):
-            raise ConfigurationError(f"control.{field} must be nonnegative")
-    _number(control["max_tilt_rad"], "max_tilt_rad", positive=True)
-    if control["max_tilt_rad"] >= math.pi / 2:
-        raise ConfigurationError("max_tilt_rad must be below pi/2 for this upright controller")
-    _number(control["max_yaw_rate_rad_s"], "max_yaw_rate_rad_s", positive=True)
-    if control["max_acceleration_m_s2"] is not None:
-        _number(control["max_acceleration_m_s2"], "max_acceleration_m_s2", positive=True)
-    alloc = config["allocation"]
+
+
+def _validate_allocation(alloc):
     _keys(alloc, {"weights", "regularization"}, {"weights", "regularization"}, "allocation")
     if np.any(_array(alloc["weights"], (6,), "allocation.weights") <= 0):
         raise ConfigurationError("allocation.weights must be positive")
     _number(alloc["regularization"], "allocation.regularization", nonnegative=True)
-    trajectory = config["trajectory"]
-    _keys(trajectory, {"kind", "hold", "spiral", "completion"}, {"kind", "hold", "spiral", "completion"}, "trajectory")
-    if trajectory["kind"] not in ("hold", "spiral", "helix"):
-        raise ConfigurationError("trajectory.kind must be hold, helix, or legacy alias spiral")
-    _keys(trajectory["hold"], {"position_w_m", "yaw_rad"}, {"position_w_m", "yaw_rad"}, "trajectory.hold")
-    if trajectory["hold"]["position_w_m"] is not None:
-        _array(trajectory["hold"]["position_w_m"], (3,), "trajectory.hold.position_w_m")
-    if trajectory["hold"]["yaw_rad"] is not None:
-        _number(trajectory["hold"]["yaw_rad"], "trajectory.hold.yaw_rad")
-    from isaac_drone.trajectories.completion import validate_completion_config
-    from isaac_drone.trajectories.helix import validate_spiral_config
-    validate_spiral_config(trajectory["spiral"])
-    validate_completion_config(trajectory["completion"])
-    if trajectory["kind"] in ("spiral", "helix"):
-        if not launch["from_ground"]:
-            raise ConfigurationError("Helix mission requires ground launch; use configs/arl_robot_1_helix.yaml")
-        plan = trajectory["spiral"]
-        if plan["start_delay_s"] <= 0:
-            raise ConfigurationError("Ground helix requires positive start_delay_s for motor spin-up")
-        # A null (minimum-time) duration is known only after planning; runtime reset checks it then.
-        if plan["takeoff_duration_s"] is not None and plan["spiral_duration_s"] is not None:
-            mission_time = plan["start_delay_s"]+plan["takeoff_duration_s"]+plan["spiral_duration_s"]
-            if sim["duration_s"] < mission_time+trajectory["completion"]["dwell_time_s"]+2*sim["dt"]:
-                raise ConfigurationError("simulation.duration_s must allow the complete helix and measured hover dwell")
-    scene = config["scene"]
+
+
+def _validate_scene(scene):
     _keys(scene, {"ground", "light"}, {"ground", "light"}, "scene")
     for field in ("ground", "light"):
-        allowed = {"enabled", "prim_path", "native_overrides"} if field == "ground" else {"enabled", "prim_path", "intensity"}
+        allowed = {"enabled", "prim_path", "native_overrides"} if field == "ground" else {"enabled", "prim_path",
+                                                                                         "intensity"}
         _keys(scene[field], allowed, allowed, f"scene.{field}")
         _boolean(scene[field]["enabled"], f"scene.{field}.enabled")
         if not isinstance(scene[field]["prim_path"], str) or not scene[field]["prim_path"].startswith("/World/"):
@@ -262,16 +246,15 @@ def validate_config(config: dict) -> None:
     if not isinstance(scene["ground"]["native_overrides"], dict):
         raise ConfigurationError("scene.ground.native_overrides must be a mapping")
     _number(scene["light"]["intensity"], "scene.light.intensity", nonnegative=True)
-    log = config["logging"]
-    _keys(log, {"directory", "every_n_steps", "flush_every_n_records"}, {"directory", "every_n_steps", "flush_every_n_records"}, "logging")
+
+
+def _validate_logging(log):
+    fields = {"directory", "every_n_steps", "flush_every_n_records"}
+    _keys(log, fields, fields, "logging")
     if not isinstance(log["directory"], str) or not log["directory"]:
         raise ConfigurationError("logging.directory must be nonempty")
     for field in ("every_n_steps", "flush_every_n_records"):
         _integer(log[field], f"logging.{field}", 1)
-    from isaac_drone.effects import build_effects
-    from isaac_drone.power import validate_power_config
-    build_effects(config["effects"])
-    validate_power_config(config["power"])
 
 
 def resolve_asset(config: dict, repo_root: Path = REPO_ROOT) -> Path:
@@ -281,7 +264,7 @@ def resolve_asset(config: dict, repo_root: Path = REPO_ROOT) -> Path:
         path = repo_root / path
     path = path.resolve()
     if not path.is_file():
-        raise ConfigurationError(f"Local ARL USD missing: {path}; run download_assets.sh explicitly")
+        raise ConfigurationError(f"Local ARL USD missing: {path}; run scripts/download_assets.sh explicitly")
     with path.open("rb") as stream:
         if stream.read(80).startswith(b"version https://git-lfs.github.com/spec/v1"):
             raise ConfigurationError(f"{path} is a Git LFS pointer; run git lfs pull")
@@ -294,6 +277,7 @@ def assert_flight_ready(config: dict, matrix: np.ndarray) -> None:
         raise ConfigurationError("Specify measured or explicitly chosen simulation rotor directions before flight")
     allocation = _array(matrix, (6, 4), "runtime allocation matrix")
     if not np.allclose(allocation[:3], np.tile([[0.0], [0.0], [1.0]], (1, 4)), atol=1e-7, rtol=0):
-        raise ConfigurationError("The current geometric controller requires all thrust axes parallel to body +Z; choose a different controller for tilted rotors")
-    if np.linalg.matrix_rank(allocation[[2, 3, 4, 5], :]) != 4:
+        raise ConfigurationError("The upright controllers require all thrust axes parallel to body +Z; "
+                                 "tilted rotors need a different controller")
+    if np.linalg.matrix_rank(allocation[[2, 3, 4, 5]]) != 4:
         raise ConfigurationError("Actual rotor geometry/directions have rank < 4 for collective/roll/pitch/yaw")

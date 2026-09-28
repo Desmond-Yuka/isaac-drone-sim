@@ -58,6 +58,15 @@ def runtime(monkeypatch, tmp_path):
         def reset(self):
             state.lifecycle.append("loop.reset")
 
+        def plan_summary(self):
+            return None
+
+        def reference_path_points(self):
+            return np.array([[100.0, 100.0, 100.0]])
+
+        def run_metadata(self):
+            return {}
+
         def prepare_step(self):
             if state.interrupt is not None and self.step_index == 20:
                 raise state.interrupt("interrupted flight")

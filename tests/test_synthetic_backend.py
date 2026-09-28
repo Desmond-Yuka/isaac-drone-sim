@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def make_plant():
-    config = load_config(ROOT / "configs/arl_robot_1_helix.yaml")
+    config = load_config(ROOT / "configs/helix.yaml")
     plant = SyntheticBackend(config)
     launch = config["vehicle"]["launch"]
     plant.reset(plant.ground_start_position(launch["ground_z_m"], launch["clearance_m"]))

@@ -6,10 +6,18 @@ import json
 import numpy as np
 import pytest
 
-from isaac_drone.config import ConfigurationError, load_config, validate_config, assert_flight_ready, resolve_asset
+from isaac_drone.config import (
+    HELIX_CONFIG,
+    ConfigurationError,
+    assert_flight_ready,
+    load_config,
+    resolve_asset,
+    validate_config,
+)
+from isaac_drone.trajectories.timing import HermiteTimeLaw
 from isaac_drone.runtime import MotionControlLoop
 from isaac_drone.telemetry import RunRecorder
-from isaac_drone.trajectories import HoldTrajectory, SpiralTrajectory
+from isaac_drone.trajectories import TRAJECTORIES
 from isaac_drone.core.types import MassProperties, VehicleState, Wrench
 
 
@@ -26,13 +34,17 @@ def test_default_config_has_explicit_source_and_local_usd():
     lambda c: c["simulation"].update(dt=0),
     lambda c: c["simulation"].update(control_decimation=1.5),
     lambda c: c["simulation"].update(gravity=[0, 0, 0]),
-    lambda c: c["control"].update(position_kp=[1, np.nan, 2]),
+    lambda c: c["controller"].update(position_kp=[1, np.nan, 2]),
     lambda c: c["vehicle"]["thrusters"].update(tau_dec_range=[0, 0]),
     lambda c: c["vehicle"]["thrusters"].update(thrust_range=[10, 0]),
     lambda c: c["vehicle"]["initial_state"].update(quaternion_wxyz=[0, 0, 0, 0]),
     lambda c: c["simulation"]["native_overrides"].update(dt=0.1),
     lambda c: c["vehicle"]["native_overrides"].update(actuators={}),
-    lambda c: c["control"].update(position_kkp=[1, 1, 1]),
+    lambda c: c["controller"].update(position_kkp=[1, 1, 1]),
+    lambda c: c["controller"].update(kind="unknown_controller"),
+    lambda c: c["limits"].update(max_tilt_rad=2.0),
+    lambda c: c["trajectory"].update(kind="helix"),
+    lambda c: c.update(schema_version=1),
 ])
 def test_bad_configuration_fails_instead_of_silent_default(change):
     cfg = load_config()
@@ -43,7 +55,7 @@ def test_bad_configuration_fails_instead_of_silent_default(change):
 
 def test_duplicate_yaml_keys_fail(tmp_path):
     path = tmp_path / "duplicate.yaml"
-    path.write_text("schema_version: 1\nschema_version: 1\n")
+    path.write_text("schema_version: 2\nschema_version: 2\n")
     with pytest.raises(ConfigurationError, match="Duplicate"):
         load_config(path)
 
@@ -125,7 +137,7 @@ def test_control_decimation_preserves_each_physics_motor_and_effect_tick():
     assert loop.time_s == 0
 
 
-def test_loop_pairing_and_helix_reference_are_explicit():
+def test_loop_pairing_is_explicit_and_kind_switch_replaces_parameters():
     cfg = load_config()
     loop = MotionControlLoop(cfg, FakeBackend())
     with pytest.raises(RuntimeError):
@@ -136,10 +148,14 @@ def test_loop_pairing_and_helix_reference_are_explicit():
     loop.prepare_step()
     with pytest.raises(RuntimeError):
         loop.prepare_step()
-    trajectory = SpiralTrajectory(cfg["trajectory"]["spiral"])
+    helix = load_config(HELIX_CONFIG)["trajectory"]
+    assert cfg["trajectory"] == {"kind": "hold", "position_w_m": None, "yaw_rad": None}
+    trajectory = TRAJECTORIES.build(helix, "trajectory")
     trajectory.reset(loop.backend.read_state(0))
-    np.testing.assert_allclose(trajectory.sample(trajectory.mission_duration_s).position_w,
-                               loop.backend.read_state(0).position_w + [0, 0, 4])
+    trajectory.set_time_laws(takeoff=HermiteTimeLaw(1.), helix=HermiteTimeLaw(5.))
+    np.testing.assert_allclose(trajectory.sample(trajectory.motion_duration_s).position_w,
+                               trajectory.endpoint_position_w)
+    assert trajectory.endpoint_position_w[2] == pytest.approx(loop.backend.read_state(0).position_w[2] + 6)
 
 
 def test_recording_is_strict_json_and_records_actual_config(tmp_path):
@@ -167,16 +183,12 @@ class SpeedOnlyGroundBackend(FakeBackend):
     def read_state(self, time_s):
         return replace(super().read_state(time_s), position_w=self.start.copy())
 
-    def apply(self, *_):
-        raise AssertionError("Flight must not submit the legacy thrust interface")
-
     def apply_motor_speeds(self, target_rps, external):
         self.speed_commands.append(target_rps.copy())
         self.applied.append((1e-5*target_rps**2, external))
 
 
 def test_helix_starts_with_zero_motor_speed_and_retains_measured_ground_origin():
-    from isaac_drone.config import HELIX_CONFIG
     cfg = load_config(HELIX_CONFIG)
     backend = SpeedOnlyGroundBackend()
     loop = MotionControlLoop(cfg, backend)
@@ -185,7 +197,7 @@ def test_helix_starts_with_zero_motor_speed_and_retains_measured_ground_origin()
     first = loop.prepare_step()
     np.testing.assert_array_equal(first["motor_command_rps"], np.zeros(4))
     np.testing.assert_array_equal(loop.setpoint.position_w, backend.start)
-    assert first["mission_phase"] == "delay"
+    assert first["mission_phase"] == "spin_up"
     after = loop.finish_step()
     assert not after["mission"]["achieved"]
     second = loop.prepare_step()
@@ -196,17 +208,19 @@ def test_helix_starts_with_zero_motor_speed_and_retains_measured_ground_origin()
     loop.finish_step()
     # The preset's null durations are planned for minimum time at reset.
     plan = loop.feasibility["minimum_time_plan"]
-    assert plan["planned_phases"] == ["takeoff", "spiral"]
-    assert loop.feasibility["phase_boundaries_s"] == loop.trajectory.phase_boundaries_s
-    assert cfg["simulation"]["duration_s"] >= loop.trajectory.mission_duration_s
+    assert plan["planned_phases"] == ["takeoff", "helix"]
+    assert loop.phase_schedule()[0] == (0.0, "spin_up")
+    assert loop.phase_schedule()[1:] == loop.trajectory.phase_boundaries_s
+    assert [name for _, name in loop.phase_schedule()] == ["spin_up", "takeoff", "helix", "hold"]
+    end = loop.trajectory.phase_boundaries_s[-1][0]
+    assert cfg["simulation"]["duration_s"] >= end
     short = load_config(HELIX_CONFIG)
-    short["simulation"]["duration_s"] = loop.trajectory.mission_duration_s
+    short["simulation"]["duration_s"] = end
     with pytest.raises(ValueError, match="dwell"):
         MotionControlLoop(short, SpeedOnlyGroundBackend()).reset()
 
 
-def test_helix_reference_anchors_to_truth_even_with_biased_estimator():
-    from isaac_drone.config import HELIX_CONFIG
+def test_ground_launch_reference_anchors_to_truth_even_with_biased_estimator():
     backend = SpeedOnlyGroundBackend()
     class BiasedEstimate:
         def reset(self):

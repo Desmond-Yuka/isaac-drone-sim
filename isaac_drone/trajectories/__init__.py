@@ -1,17 +1,17 @@
-"""Motion objectives independent of low-level control and physics."""
-from isaac_drone.trajectories.helix import SpiralTrajectory
+"""Motion references independent of low-level control and physics.
 
-from .hold import HoldTrajectory
-
-HelixTrajectory = SpiralTrajectory
-
-
-def build_trajectory(config):
-    if config["kind"] == "hold":
-        return HoldTrajectory(**config["hold"])
-    if config["kind"] in ("spiral", "helix"):
-        return SpiralTrajectory(config["spiral"])
-    raise ValueError(f"Unknown trajectory kind: {config['kind']}")
+Importing this package registers the built-in trajectories in ``TRAJECTORIES``.
+"""
+from .base import TRAJECTORIES, HOLD_PHASE, Segment, SegmentedTrajectory
+from .completion import CompletionMonitor, CompletionParams
+from .helix import HelixParams, HelixTrajectory
+from .hold import HoldParams, HoldTrajectory
 
 
-__all__ = ["HoldTrajectory", "SpiralTrajectory", "HelixTrajectory", "build_trajectory"]
+def build_trajectory(section) -> SegmentedTrajectory:
+    """Construct the trajectory selected by a ``trajectory: {kind: ..., ...}`` config section."""
+    return TRAJECTORIES.build(section, "trajectory")
+
+
+__all__ = ["HOLD_PHASE", "TRAJECTORIES", "CompletionMonitor", "CompletionParams", "HelixParams", "HelixTrajectory",
+           "HoldParams", "HoldTrajectory", "Segment", "SegmentedTrajectory", "build_trajectory"]

@@ -4,28 +4,31 @@ import math
 import numpy as np
 import pytest
 
-from isaac_drone.trajectories.feasibility import nominal_requirement, validate_helix_feasibility
-from isaac_drone.trajectories.min_time import plan_minimum_time, timing_summary
-from isaac_drone.trajectories.helix import HelixTrajectory, validate_spiral_config
-from isaac_drone.trajectories.timing import CruiseTimeLaw, HermiteTimeLaw, _progress_derivatives, _progress_integral
+from isaac_drone.control import FlightLimits
 from isaac_drone.core.types import MassProperties, VehicleState
+from isaac_drone.core.validation import ConfigurationError
+from isaac_drone.trajectories import TRAJECTORIES
+from isaac_drone.trajectories.feasibility import nominal_requirement, validate_trajectory_feasibility
+from isaac_drone.trajectories.min_time import plan_minimum_time, timing_summary
+from isaac_drone.trajectories.timing import CruiseTimeLaw, HermiteTimeLaw, _progress_derivatives, _progress_integral
 
 GRAVITY = np.array([0., 0., -9.81])
 LOWER, UPPER = np.full(4, .1), np.full(4, 10.)
 
 
 def config(**changes):
-    values = dict(start_delay_s=2., takeoff_height_m=1., takeoff_duration_s=None, radius_m=1., turns=2.,
-                  climb_height_m=2., spiral_duration_s=None, initial_phase_rad=-math.pi/2, yaw_mode="tangent",
-                  yaw_offset_rad=0., initial_speed_tolerance_m_s=1e-3, initial_angular_speed_tolerance_rad_s=1e-3,
+    values = dict(kind="helix", takeoff_height_m=1., takeoff_duration_s=None, radius_m=1., turns=2.,
+                  climb_height_m=2., helix_duration_s=None, initial_phase_rad=-math.pi/2, yaw_mode="tangent",
+                  yaw_offset_rad=0., rest_speed_tolerance_m_s=1e-3, rest_angular_speed_tolerance_rad_s=1e-3,
                   thrust_utilization=.85)
     values.update(changes)
     return values
 
 
 def reset_path(**changes):
-    path = HelixTrajectory(config(**changes))
-    path.reset(VehicleState(0., np.array([.3, -.2, .1]), np.array([1., 0., 0., 0.]), np.zeros(3), np.zeros(3)))
+    path = TRAJECTORIES.build(config(**changes), "trajectory")
+    path.reset(VehicleState(0., np.array([.3, -.2, .1]), np.array([1., 0., 0., 0.]), np.zeros(3), np.zeros(3)),
+               start_time_s=2.)
     return path
 
 
@@ -40,7 +43,7 @@ def matrix():
 def control(**changes):
     result = dict(max_tilt_rad=math.radians(80), max_yaw_rate_rad_s=2*math.pi, max_acceleration_m_s2=None)
     result.update(changes)
-    return result
+    return FlightLimits(**result)
 
 
 def plan(controls=None, lag=(0.0, 0.0), **changes):
@@ -96,30 +99,31 @@ def test_cruise_law_rejects_ramps_that_cannot_reach_the_rate():
 
 @pytest.mark.parametrize("utilization", [None, .5, 1.2, True])
 def test_null_durations_require_a_valid_thrust_utilization(utilization):
-    with pytest.raises(ValueError, match="thrust_utilization"):
-        validate_spiral_config(config(thrust_utilization=utilization))
+    with pytest.raises(ConfigurationError, match="thrust_utilization"):
+        TRAJECTORIES.parse(config(thrust_utilization=utilization), "trajectory")
 
 
 def test_fixed_durations_do_not_need_utilization_and_keep_the_hermite_law():
-    path = HelixTrajectory({key: value for key, value in config(takeoff_duration_s=4., spiral_duration_s=24.).items()
-                            if key != "thrust_utilization"})
+    path = TRAJECTORIES.build({key: value for key, value in config(takeoff_duration_s=4., helix_duration_s=24.).items()
+                               if key != "thrust_utilization"}, "trajectory")
+    path.reset(VehicleState(0., np.zeros(3), np.array([1., 0., 0., 0.]), np.zeros(3), np.zeros(3)))
     assert path.planned_phases == ()
     assert all(isinstance(law, HermiteTimeLaw) for law in path.time_laws.values())
 
 
 def test_null_phases_cannot_be_sampled_until_planned_and_reset_clears_the_plan():
     path = reset_path(takeoff_duration_s=3.)
-    assert path.planned_phases == ("spiral",)
+    assert path.planned_phases == ("helix",)
     assert path.endpoint_position_w.shape == (3,)
     with pytest.raises(RuntimeError, match="Plan"):
-        path.sample(0.)
+        path.sample(2.)
     with pytest.raises(ValueError, match="null-duration"):
         path.set_time_laws(takeoff=HermiteTimeLaw(1.))
     law = CruiseTimeLaw(.2, 1., 1.)
-    path.set_time_laws(spiral=law)
-    assert path.mission_duration_s == pytest.approx(2.+3.+law.duration_s)
-    assert path.phase(5.5) == "spiral"
-    np.testing.assert_allclose(path.sample(path.mission_duration_s).position_w, path.endpoint_position_w)
+    path.set_time_laws(helix=law)
+    assert path.motion_duration_s == pytest.approx(3.+law.duration_s)
+    assert path.phase(5.5) == "helix"
+    np.testing.assert_allclose(path.sample(2.+path.motion_duration_s).position_w, path.endpoint_position_w)
     path.reset(VehicleState(1., np.zeros(3), np.array([1., 0., 0., 0.]), np.zeros(3), np.zeros(3)))
     with pytest.raises(RuntimeError, match="Plan"):
         path.sample(1.)
@@ -127,10 +131,10 @@ def test_null_phases_cannot_be_sampled_until_planned_and_reset_clears_the_plan()
 
 def test_plan_reaches_but_never_exceeds_the_thrust_band(lagged):
     path, report = lagged
-    assert report["planned_phases"] == ["takeoff", "spiral"]
+    assert report["planned_phases"] == ["takeoff", "helix"]
     lower_band, upper_band = (np.array(item) for item in report["planning_band_n"])
     np.testing.assert_allclose(upper_band, UPPER-.15*(UPPER-LOWER))
-    check = validate_helix_feasibility(path, control(), mass(), GRAVITY, matrix(), LOWER, UPPER)
+    check = validate_trajectory_feasibility(path, control(), mass(), GRAVITY, matrix(), LOWER, UPPER)
     assert np.all(np.array(check["sampled_max_rotor_thrust_n"]) <= upper_band+1e-2)
     assert np.all(np.array(check["sampled_min_rotor_thrust_n"]) >= lower_band-1e-2)
     # "Maximum motor use": the busiest rotor nearly reaches the top of the band. Minimum time,
@@ -138,10 +142,11 @@ def test_plan_reaches_but_never_exceeds_the_thrust_band(lagged):
     assert max(check["sampled_max_rotor_thrust_n"]) > .95*upper_band.max()
     fraction = np.array(check["sampled_max_thrust_fraction_of_max"])
     np.testing.assert_allclose(check["sampled_max_motor_speed_fraction_of_max"], np.sqrt(fraction))
-    assert check["phase_boundaries_s"] == path.phase_boundaries_s
-    assert check["timing"]["phases"]["spiral"]["planned"]
+    assert check["phase_boundaries_s"] == [start for start, _ in path.phase_boundaries_s]
+    assert check["phase_names"] == ["takeoff", "helix", "hold"]
+    assert check["timing"]["phases"]["helix"]["planned"]
     summary = timing_summary(check)
-    assert "spiral" in summary and "(min-time)" in summary
+    assert "helix" in summary and "(min-time)" in summary
 
 
 def test_motor_lag_lead_keeps_command_in_band_and_lengthens_ramps(lagged, ideal):
@@ -150,27 +155,27 @@ def test_motor_lag_lead_keeps_command_in_band_and_lengthens_ramps(lagged, ideal)
     upper_band = np.array(report["planning_band_n"][1])
     inverse = np.linalg.inv(matrix()[2:])
     assert report["phases"]["takeoff"]["accelerate_s"] > ideal[1]["phases"]["takeoff"]["accelerate_s"]
-    start = path.phase_boundaries_s[1]
+    start = path.phase_boundaries_s[0][0]
     times = np.linspace(start, start+report["phases"]["takeoff"]["accelerate_s"], 400)
     rotors = np.array([inverse@np.r_[nominal_requirement(path.sample(t), 1.24, mass().inertia_com_b, GRAVITY)[:2]]
                        for t in times])
     slope = np.gradient(rotors, times, axis=0)
     lead = rotors+np.where(slope > 0, tau_up, tau_down)*slope
     assert np.all(lead <= upper_band+.05)
-    assert path.mission_duration_s > ideal[0].mission_duration_s
+    assert path.motion_duration_s > ideal[0].motion_duration_s
 
 
 def test_higher_utilization_flies_faster(lagged):
     slower, _ = plan(lag=(.085, .01), thrust_utilization=.75)
-    assert lagged[0].mission_duration_s < slower.mission_duration_s
+    assert lagged[0].motion_duration_s < slower.motion_duration_s
 
 
 def test_tangent_heading_rate_limit_caps_the_cruise_rate():
     path, report = plan(controls=control(max_yaw_rate_rad_s=1.5), takeoff_duration_s=3.)
-    assert report["planned_phases"] == ["spiral"]
-    spiral = report["phases"]["spiral"]
+    assert report["planned_phases"] == ["helix"]
+    spiral = report["phases"]["helix"]
     assert spiral["peak_rate_per_s"]*abs(path.turn_angle_rad) <= 1.5+1e-9
-    validate_helix_feasibility(path, control(max_yaw_rate_rad_s=1.5), mass(), GRAVITY, matrix(), LOWER, UPPER)
+    validate_trajectory_feasibility(path, control(max_yaw_rate_rad_s=1.5), mass(), GRAVITY, matrix(), LOWER, UPPER)
 
 
 def test_hover_outside_the_band_is_rejected():

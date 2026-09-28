@@ -196,8 +196,14 @@ class BiasedEstimate:
 
 
 class CountingTrajectory:
-    def reset(self, initial_state):
+    """A duck-typed (non-segmented) trajectory: no planning or screening is applied to it."""
+
+    def reset(self, initial_state, start_time_s=None):
+        self.start_time_s = initial_state.time_s if start_time_s is None else start_time_s
         self.sample_times = []
+
+    def phase(self, time_s):
+        return "scripted"
 
     def sample(self, time_s):
         self.sample_times.append(time_s)

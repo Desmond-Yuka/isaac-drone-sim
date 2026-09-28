@@ -18,7 +18,7 @@ from isaac_drone.sim.synthetic import SyntheticBackend
 
 ROOT = Path(__file__).resolve().parents[1]
 GOLDEN = np.load(Path(__file__).parent / "data" / "golden_synthetic.npz")
-CONFIGS = {"helix": ROOT / "configs/arl_robot_1_helix.yaml", "hold": ROOT / "configs/arl_robot_1.yaml"}
+CONFIGS = {"helix": ROOT / "configs/helix.yaml", "hold": ROOT / "configs/arl_robot_1.yaml"}
 TOLERANCE = {"rtol": 1e-9, "atol": 1e-9}
 
 
@@ -53,7 +53,7 @@ def assert_matches_golden(name, rows):
 def test_helix_prefix_through_spin_up_takeoff_and_early_helix():
     rows, _, record = fly("helix", 800)  # 4 s: spin-up, full takeoff, start of the helix
     assert_matches_golden("helix", rows)
-    assert record["mission_phase"] not in ("delay", "takeoff", "hold")
+    assert record["mission_phase"] == "helix"
 
 
 def test_hold_from_airborne_start():

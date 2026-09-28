@@ -1,30 +1,34 @@
-"""A constant CoM target for initial closed-loop integration checks."""
-import math
+"""A constant CoM target: the simplest closed-loop check (no motion segments)."""
+from __future__ import annotations
+
+from dataclasses import dataclass
 
 import numpy as np
 
-from isaac_drone.core.types import TrajectorySetpoint, VehicleState
-from isaac_drone.core.validation import finite_array
+from isaac_drone.core.params import Vec3
+
+from .base import TRAJECTORIES, SegmentedTrajectory
 
 
-class HoldTrajectory:
-    def __init__(self, position_w_m=None, yaw_rad=None):
-        self._position = None if position_w_m is None else finite_array(position_w_m, (3,), "hold position")
-        self._yaw = yaw_rad
-        if yaw_rad is not None and not np.isfinite(yaw_rad):
-            raise ValueError("hold yaw must be finite")
-        self._target = None
+@dataclass(frozen=True)
+class HoldParams:
+    """``trajectory: {kind: hold}``; null position/yaw keep the actual reset CoM position/heading."""
 
-    def reset(self, initial_state: VehicleState) -> None:
-        w, x, y, z = initial_state.quaternion_wxyz
-        yaw = math.atan2(2 * (w*z+x*y), 1-2*(y*y+z*z)) if self._yaw is None else self._yaw
-        self._target = TrajectorySetpoint(
-            initial_state.position_w if self._position is None else self._position,
-            yaw_rad=float(yaw))
+    position_w_m: Vec3 | None = None
+    yaw_rad: float | None = None
 
-    def sample(self, time_s: float) -> TrajectorySetpoint:
-        if not np.isfinite(time_s) or time_s < 0:
-            raise ValueError("trajectory time must be finite and nonnegative")
-        if self._target is None:
-            raise RuntimeError("reset trajectory before sampling")
-        return self._target
+
+class HoldTrajectory(SegmentedTrajectory):
+    def __init__(self, params: HoldParams | None = None):
+        super().__init__()
+        self.params = params or HoldParams()
+
+    def _build(self, position_w, yaw_rad):
+        target = position_w if self.params.position_w_m is None else np.array(self.params.position_w_m, dtype=float)
+        return [], target, yaw_rad if self.params.yaw_rad is None else self.params.yaw_rad
+
+
+@TRAJECTORIES.register("hold", params=HoldParams)
+def build_hold(params: HoldParams) -> HoldTrajectory:
+    """Hold a fixed CoM position and heading."""
+    return HoldTrajectory(params)

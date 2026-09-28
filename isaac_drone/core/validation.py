@@ -6,6 +6,10 @@ from numbers import Real
 import numpy as np
 
 
+class ConfigurationError(ValueError):
+    """Invalid or incomplete explicitly selected configuration."""
+
+
 def finite_array(value: object, shape: tuple[int, ...], name: str) -> np.ndarray:
     """Return an owned finite float64 array with exactly ``shape``."""
     try:

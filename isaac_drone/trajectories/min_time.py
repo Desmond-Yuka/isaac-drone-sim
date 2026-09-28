@@ -1,6 +1,6 @@
-"""Minimum-time timing of the takeoff and helix phases from actual vehicle limits.
+"""Minimum-time timing of trajectory segments from actual vehicle limits.
 
-Each phase whose configured duration is null gets an accelerate/cruise/
+Each segment whose configured duration is null gets an accelerate/cruise/
 decelerate ``CruiseTimeLaw`` over its unchanged geometric path. The planner
 searches the cruise rate and the shortest acceleration/deceleration ramps
 such that, at every sample, the nominal ideal-tracking rotor thrusts stay in
@@ -11,7 +11,7 @@ the central ``thrust_utilization`` band of each rotor's actual thrust range::
 
 The reserve on both sides is left to feedback: no thrust would remain for
 correcting errors if the plan itself used the full range. The configured
-max_tilt, max_acceleration and max_yaw_rate limits are respected too.
+``limits`` (max tilt, acceleration and yaw rate) are respected too.
 
 First-order motor lag is included: for the rotor to actually produce f(t),
 its command must lead by about tau * df/dt, so ``f + tau * df/dt`` (tau_up
@@ -19,7 +19,7 @@ while rising, tau_down while falling; df/dt from consecutive samples) must
 also stay in the band. Without this, short ramps demand thrust changes the
 motors cannot follow and the vehicle falls behind the reference.
 
-Like ``validate_helix_feasibility`` this is a sampled rigid-body feedforward
+Like ``validate_trajectory_feasibility`` this is a sampled rigid-body feedforward
 screen, not a proof: disturbances and tracking errors are not included, and a
 sample grid can miss peaks between samples.
 """
@@ -29,10 +29,11 @@ import math
 
 import numpy as np
 
+from isaac_drone.control.base import FlightLimits
 from isaac_drone.core.types import MassProperties
 from isaac_drone.core.validation import finite_array, finite_scalar
-from isaac_drone.trajectories.helix import SpiralTrajectory
 
+from .base import SegmentedTrajectory
 from .feasibility import nominal_requirement
 from .timing import CruiseTimeLaw
 
@@ -182,8 +183,8 @@ def _plan_phase(limits: _PhaseLimits, path_length: float, steady_samples: int, r
 
 
 def plan_minimum_time(
-    trajectory: SpiralTrajectory,
-    control_config: dict,
+    trajectory: SegmentedTrajectory,
+    limits: FlightLimits,
     mass_properties: MassProperties,
     gravity_w: np.ndarray,
     allocation_matrix_b: np.ndarray,
@@ -191,16 +192,18 @@ def plan_minimum_time(
     upper_thrust_n: np.ndarray,
     motor_time_constants_s: tuple[float, float] = (0.0, 0.0),
 ) -> dict:
-    """Assign minimum-time laws to the trajectory's null-duration phases.
+    """Assign minimum-time laws to the trajectory's null-duration segments.
 
     The trajectory must already be reset to the actual initial state. Inputs
-    are the same actual vehicle quantities used by validate_helix_feasibility,
+    are the same actual vehicle quantities used by validate_trajectory_feasibility,
     plus the slowest (rising, falling) first-order motor time constants [s].
     """
     phases = trajectory.planned_phases
     if not phases:
         return {"planned_phases": []}
-    utilization = float(trajectory.config["thrust_utilization"])
+    if trajectory.thrust_utilization is None:
+        raise ValueError("Minimum-time planning requires the trajectory's thrust_utilization")
+    utilization = float(trajectory.thrust_utilization)
     gravity = finite_array(gravity_w, (3,), "gravity_w")
     matrix = finite_array(allocation_matrix_b, (6, 4), "allocation_matrix_b")
     lower = finite_array(lower_thrust_n, (4,), "lower_thrust_n")
@@ -222,28 +225,19 @@ def plan_minimum_time(
     if np.any(hover < band_lower) or np.any(hover > band_upper):
         raise ValueError(f"Hover thrusts {hover.tolist()} N lie outside the planning band "
                          f"[{band_lower.tolist()}, {band_upper.tolist()}] N; raise thrust_utilization")
-    maximum_tilt = finite_scalar(control_config["max_tilt_rad"], "max_tilt_rad")
-    maximum_yaw_rate = finite_scalar(control_config["max_yaw_rate_rad_s"], "max_yaw_rate_rad_s")
     tau_up, tau_down = (finite_scalar(value, "motor time constant") for value in motor_time_constants_s)
     if tau_up < 0 or tau_down < 0:
         raise ValueError("Motor time constants must be nonnegative")
-    maximum_acceleration = control_config["max_acceleration_m_s2"]
-    if maximum_acceleration is not None:
-        maximum_acceleration = finite_scalar(maximum_acceleration, "max_acceleration_m_s2")
-    lengths = trajectory.path_lengths_m
-    turns = abs(trajectory.config["turns"])
-    yaw_per_progress = {
-        "takeoff": abs(trajectory.takeoff_yaw_change_rad),
-        "spiral": abs(trajectory.turn_angle_rad) if trajectory.config["yaw_mode"] == "tangent" else 0.0,
-    }
-    setpoints = {"takeoff": trajectory.takeoff_setpoint, "spiral": trajectory.spiral_setpoint}
-    steady_samples = {"takeoff": 33, "spiral": max(33, math.ceil(16*turns)+1)}
+    segments = {segment.name: segment for segment in trajectory.segments}
     laws, report = {}, {}
     for phase in phases:
-        limits = _PhaseLimits(setpoints[phase], mass, inertia, gravity, inverse, band_lower, band_upper,
-                              maximum_tilt, maximum_acceleration, (tau_up, tau_down))
-        rate_cap = maximum_yaw_rate/yaw_per_progress[phase] if yaw_per_progress[phase] > 0 else math.inf
-        laws[phase], report[phase] = _plan_phase(limits, lengths[phase], steady_samples[phase], rate_cap)
+        segment = segments[phase]
+        phase_limits = _PhaseLimits(segment.setpoint, mass, inertia, gravity, inverse, band_lower, band_upper,
+                                    limits.max_tilt_rad, limits.max_acceleration_m_s2, (tau_up, tau_down))
+        yaw_per_progress = abs(segment.yaw_change_rad)
+        rate_cap = limits.max_yaw_rate_rad_s/yaw_per_progress if yaw_per_progress > 0 else math.inf
+        steady_samples = max(33, math.ceil(16*segment.revolutions)+1)
+        laws[phase], report[phase] = _plan_phase(phase_limits, segment.length_m, steady_samples, rate_cap)
     trajectory.set_time_laws(**laws)
     return {"planned_phases": list(phases), "thrust_utilization": utilization,
             "planning_band_n": [band_lower.tolist(), band_upper.tolist()], "hover_thrusts_n": hover.tolist(),
@@ -260,6 +254,6 @@ def timing_summary(feasibility_report: dict) -> str:
              f"peak {item['peak_speed_m_s']:.2f} m/s" for phase, item in timing["phases"].items()]
     thrust = max(feasibility_report["sampled_max_thrust_fraction_of_max"])
     speed = max(feasibility_report["sampled_max_motor_speed_fraction_of_max"])
-    return (f"{'; '.join(parts)}; motion ends at {timing['mission_duration_s']:.2f} s; nominal peak rotor "
+    return (f"{'; '.join(parts)}; motion ends at {timing['phase_boundaries_s'][-1]:.2f} s; nominal peak rotor "
             f"thrust {100*thrust:.0f}% / speed {100*speed:.0f}% of max, tilt "
             f"{math.degrees(feasibility_report['sampled_max_required_tilt_rad']):.0f} deg")

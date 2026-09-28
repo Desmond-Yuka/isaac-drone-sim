@@ -25,7 +25,7 @@ _ROTOR_COLORS = ("tab:blue", "tab:orange", "tab:green", "tab:red")
 _ACTUAL = {"color": "tab:blue", "linewidth": 1.2}
 _IDEAL = {"color": "black", "linestyle": "--", "linewidth": 1.0}
 _SOLVER = {"color": "tab:orange", "linewidth": 0.8, "alpha": 0.8}
-_PHASE_NAMES = ("delay", "takeoff", "helix", "hold")
+_LEGACY_PHASE_NAMES = ("delay", "takeoff", "helix", "hold")
 _DEG = 180.0 / math.pi
 
 
@@ -51,16 +51,26 @@ def load_basic_csv(path) -> dict[str, np.ndarray]:
 
 
 def phase_starts(config, metadata=None) -> list[tuple[float, str]]:
-    """(start time [s], name) of each nonempty helix mission phase; empty otherwise.
+    """(start time [s], name) of each nonempty mission phase; empty when unknown.
 
-    Planned boundaries in metadata (starts of delay, takeoff, helix, hold) win;
-    otherwise they follow the configured durations. Durations left null in the
-    config (computed at reset) give no markers rather than guessed ones.
+    Runs record ``mission_phases`` in metadata.json. Runs recorded before that
+    field existed stored helix ``phase_boundaries_s`` (delay, takeoff, helix,
+    hold) in the feasibility report, or only configured durations.
     """
+    metadata = metadata or {}
+    if metadata.get("mission_phases"):
+        phases = [(float(start), str(name)) for start, name in metadata["mission_phases"]]
+    else:
+        phases = _legacy_phase_starts(config, metadata)
+    ends = [start for start, _ in phases[1:]] + [math.inf]
+    return [(start, name) for (start, name), end in zip(phases, ends) if end > start]
+
+
+def _legacy_phase_starts(config, metadata):
     trajectory = config.get("trajectory", {})
     if trajectory.get("kind") not in ("helix", "spiral"):
         return []
-    feasibility = (metadata or {}).get("trajectory_feasibility")
+    feasibility = metadata.get("trajectory_feasibility")
     starts = feasibility.get("phase_boundaries_s") if isinstance(feasibility, dict) else None
     if starts is None:
         spiral = trajectory.get("spiral", {})
@@ -69,10 +79,9 @@ def phase_starts(config, metadata=None) -> list[tuple[float, str]]:
             return []
         starts = np.cumsum([0.0] + durations)
     starts = [float(start) for start in starts]
-    if len(starts) != len(_PHASE_NAMES):
+    if len(starts) != len(_LEGACY_PHASE_NAMES):
         return []
-    lengths = np.diff(starts + [math.inf])
-    return [(start, name) for start, name, length in zip(starts, _PHASE_NAMES, lengths) if length > 0]
+    return list(zip(starts, _LEGACY_PHASE_NAMES))
 
 
 def latest_run(runs_dir) -> Path:

@@ -1,24 +1,24 @@
-"""Independent boundary, geometric and derivative tests for the spiral reference."""
-from copy import deepcopy
+"""Independent boundary, geometric and derivative tests for the helix reference."""
 from dataclasses import replace
 
 import numpy as np
 from numpy.polynomial import Polynomial
 import pytest
 
-from isaac_drone.trajectories.helix import SpiralTrajectory, validate_spiral_config
+from isaac_drone.core.validation import ConfigurationError
+from isaac_drone.trajectories import TRAJECTORIES, HelixTrajectory
 from isaac_drone.trajectories.timing import _progress_derivatives
 from isaac_drone.core.types import VehicleState
 
 
 def config(**changes):
     values = {
-        "start_delay_s": 2.0, "takeoff_height_m": 1.0, "takeoff_duration_s": 4.0,
+        "kind": "helix", "takeoff_height_m": 1.0, "takeoff_duration_s": 4.0,
         "radius_m": 1.0, "turns": 2.0, "climb_height_m": 3.0,
-        "spiral_duration_s": 24.0, "initial_phase_rad": .3,
+        "helix_duration_s": 24.0, "initial_phase_rad": .3,
         "yaw_mode": "fixed", "yaw_offset_rad": .35,
-        "initial_speed_tolerance_m_s": 1e-3,
-        "initial_angular_speed_tolerance_rad_s": 1e-3,
+        "rest_speed_tolerance_m_s": 1e-3,
+        "rest_angular_speed_tolerance_rad_s": 1e-3,
     }
     values.update(changes)
     return values
@@ -29,9 +29,14 @@ def initial_state(time=0.0, yaw=-.4):
                         np.array([np.cos(yaw/2), 0, 0, np.sin(yaw/2)]), np.zeros(3), np.zeros(3))
 
 
-def trajectory(**changes):
-    result = SpiralTrajectory(config(**changes))
-    result.reset(initial_state())
+def build(**changes) -> HelixTrajectory:
+    return TRAJECTORIES.build(config(**changes), "trajectory")
+
+
+def trajectory(start_time_s=2.0, **changes):
+    """Reset at t=0 and start at 2 s, as after a 2 s launch spin-up."""
+    result = build(**changes)
+    result.reset(initial_state(), start_time_s=start_time_s)
     return result
 
 
@@ -55,9 +60,9 @@ def test_ninth_degree_progress_matches_independent_polynomial_and_boundary_const
 def test_phase_endpoints_have_exact_zero_first_four_position_derivatives(yaw_mode):
     path = trajectory(yaw_mode=yaw_mode)
     p0 = initial_state().position_w
-    assert path.mission_duration_s == 30
-    for time, name, position in [(0, "delay", p0), (2, "takeoff", p0),
-                                  (6, "spiral", p0+[0, 0, 1]),
+    assert path.motion_duration_s == 28
+    for time, name, position in [(2, "takeoff", p0),
+                                  (6, "helix", p0+[0, 0, 1]),
                                   (30, "hold", p0+[0, 0, 4])]:
         assert path.phase(time) == name
         reference = path.sample(time)
@@ -72,7 +77,10 @@ def test_phase_endpoints_have_exact_zero_first_four_position_derivatives(yaw_mod
 @pytest.mark.parametrize("yaw_mode", ["fixed", "tangent"])
 def test_position_and_heading_are_continuous_across_every_phase(yaw_mode):
     path = trajectory(yaw_mode=yaw_mode, turns=-1.25)
-    for join in (2., 6., 30.):
+    start = path.sample(2.)
+    np.testing.assert_array_equal(start.position_w, initial_state().position_w)
+    np.testing.assert_array_equal(derivatives(start), np.zeros((4, 3)))
+    for join in (6., 30.):
         left, middle, right = [path.sample(t) for t in (join-1e-6, join, join+1e-6)]
         for neighbor in (left, right):
             np.testing.assert_allclose(neighbor.position_w, middle.position_w, atol=1e-11)
@@ -123,7 +131,7 @@ def test_helix_speed_increases_then_decreases_with_analytic_midpoint_peak(turns)
     assert np.all(np.diff(speeds[:101]) > 0)
     assert np.all(np.diff(speeds[100:]) < 0)
     length = np.hypot(2*np.pi*turns*cfg["radius_m"], cfg["climb_height_m"])
-    assert speeds[100] == pytest.approx(length*315/(128*cfg["spiral_duration_s"]), abs=1e-13)
+    assert speeds[100] == pytest.approx(length*315/(128*cfg["helix_duration_s"]), abs=1e-13)
     np.testing.assert_allclose(speeds, speeds[::-1], atol=3e-14)
     # Zero tangential acceleration at peak speed does not remove centripetal acceleration.
     assert np.linalg.norm(path.sample(18).acceleration_w[:2]) > 0.1
@@ -131,7 +139,6 @@ def test_helix_speed_increases_then_decreases_with_analytic_midpoint_peak(turns)
 
 def test_fixed_yaw_offset_is_reached_smoothly_during_takeoff():
     path = trajectory(yaw_mode="fixed", yaw_offset_rad=.8)
-    assert path.sample(0).yaw_rad == pytest.approx(-.4)
     assert path.sample(2).yaw_rad == pytest.approx(-.4)
     assert path.sample(4).yaw_rad == pytest.approx(0.0)
     for time in (6, 10, 20, 30, 50):
@@ -160,15 +167,15 @@ def test_tangent_yaw_follows_direction_of_motion_without_wrapping(turns):
 
 
 def test_nonzero_reset_time_phase_boundaries_and_pure_order_independent_sampling():
-    path = SpiralTrajectory(config())
-    assert path.mission_duration_s == 30
+    path = build()
     origin = 7.2
-    path.reset(initial_state(time=origin))
-    for elapsed, phase in [(0, "delay"), (2, "takeoff"), (6, "spiral"), (30, "hold")]:
+    path.reset(initial_state(time=origin), start_time_s=origin+2)
+    assert path.motion_duration_s == 28
+    for elapsed, phase in [(2, "takeoff"), (6, "helix"), (30, "hold")]:
         assert path.phase(origin+elapsed) == phase
     expected = path.sample(origin+12.3)
     path.sample(origin+100)
-    path.sample(origin)
+    path.sample(origin+2)
     again = path.sample(origin+12.3)
     np.testing.assert_array_equal(again.position_w, expected.position_w)
     np.testing.assert_array_equal(derivatives(again), derivatives(expected))
@@ -176,34 +183,37 @@ def test_nonzero_reset_time_phase_boundaries_and_pure_order_independent_sampling
     endpoint[:] = -999
     assert np.all(path.endpoint_position_w > -999)
     with pytest.raises(ValueError, match="precedes"):
-        path.sample(origin-.01)
+        path.sample(origin+2-.01)
+    with pytest.raises(ValueError, match="precedes"):
+        path.reset(initial_state(time=2), start_time_s=1.0)
     path.reset(initial_state(time=2, yaw=.9))
     assert path.sample(2).yaw_rad == pytest.approx(.9)
 
 
-def test_zero_delay_starts_takeoff_and_fractional_turns_end_at_correct_point():
-    path = trajectory(start_delay_s=0, turns=.25, initial_phase_rad=0)
+def test_immediate_start_and_fractional_turns_end_at_correct_point():
+    path = trajectory(start_time_s=None, turns=.25, initial_phase_rad=0)
     p0 = initial_state().position_w
     assert path.phase(0) == "takeoff"
     np.testing.assert_allclose(path.endpoint_position_w, p0+[-1, 1, 4], atol=1e-14)
 
 
 @pytest.mark.parametrize("field,value", [("takeoff_height_m", 0), ("takeoff_duration_s", -1),
-    ("radius_m", 0), ("turns", 0), ("climb_height_m", -1), ("spiral_duration_s", 0),
-    ("initial_phase_rad", np.nan), ("start_delay_s", -1), ("yaw_mode", "point_at_center"),
-    ("yaw_offset_rad", np.inf), ("initial_speed_tolerance_m_s", -1),
-    ("initial_angular_speed_tolerance_rad_s", -1), ("turns", True), ("turns", "2")])
+    ("radius_m", 0), ("turns", 0), ("climb_height_m", -1), ("helix_duration_s", 0),
+    ("initial_phase_rad", np.nan), ("yaw_mode", "point_at_center"),
+    ("yaw_offset_rad", np.inf), ("rest_speed_tolerance_m_s", -1),
+    ("rest_angular_speed_tolerance_rad_s", -1), ("turns", True), ("turns", "2"),
+    ("thrust_utilization", .5), ("helix_duration_s", None)])
 def test_bad_configuration_is_rejected(field, value):
-    with pytest.raises(ValueError):
-        validate_spiral_config(config(**{field: value}))
+    with pytest.raises(ConfigurationError):
+        build(**{field: value})
 
 
 def test_missing_unknown_configuration_and_uninitialized_sampling_fail():
     missing = config(); del missing["radius_m"]
-    for invalid in (missing, {**config(), "center_w_m": [0, 0, 0]}, {**config(), 4: "bad"}):
-        with pytest.raises(ValueError):
-            SpiralTrajectory(invalid)
-    path = SpiralTrajectory(config())
+    for invalid in (missing, {**config(), "center_w_m": [0, 0, 0]}, {**config(), "kind": "spiral"}):
+        with pytest.raises(ConfigurationError):
+            TRAJECTORIES.build(invalid, "trajectory")
+    path = build()
     for operation in (lambda: path.sample(0), lambda: path.phase(0), lambda: path.endpoint_position_w):
         with pytest.raises(RuntimeError, match="reset"):
             operation()
@@ -224,13 +234,7 @@ def test_initial_motion_outside_explicit_settling_tolerances_is_not_silently_dis
 
 def test_caller_configuration_mutation_does_not_change_mission():
     cfg = config()
-    original = deepcopy(cfg)
-    path = SpiralTrajectory(cfg)
+    path = TRAJECTORIES.build(cfg, "trajectory")
     cfg["radius_m"] = 100
     path.reset(initial_state())
-    assert path.config == original
-
-
-def test_helix_name_is_the_same_three_dimensional_trajectory():
-    from isaac_drone.trajectories.helix import HelixTrajectory
-    assert HelixTrajectory is SpiralTrajectory
+    assert path.params.radius_m == 1.0
