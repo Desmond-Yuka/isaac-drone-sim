@@ -5,36 +5,37 @@
 ## 1. 数据流与目录
 
 ```text
-configs/arl_robot_1.yaml
+configs/*.yaml（extends 继承 + --set 覆盖）
         │
-        ├── backends/isaaclab.py ── USD + PhysX 实际质量/质心/惯量/几何
-        │                              │
-        └── runtime.MotionControlLoop  │
-              ├── trajectories：位置、速度、加速度、jerk、snap、偏航及其导数
-              ├── StateProvider：当前为仿真真值，未来可注入传感器/估计器
-              ├── control.GeometricController：期望质心力/力矩
-              ├── control.BoundedAllocator：每桨有界推力目标 [N]
-              ├── power.ActuatorEnvelope：电气状态下的已标定指令包线
-              ├── disturbances + aero：每物理步的附加质心力/力矩
-              └── backend：RPS 电机动态 → 每个旋翼独立施力 → PhysX
+        ├── sim/：后端（isaaclab：USD + PhysX 实际质量/质心/惯量/几何；synthetic：CPU 合成刚体）
+        │
+        └── runtime.run_experiment（与后端无关：步进、记录、钩子）
+              └── runtime.MotionControlLoop（每物理步一次）
+                    ├── trajectories：分段轨迹的位置、速度、加速度、jerk、snap、偏航及其导数；起转阶段保持起点
+                    ├── StateProvider：当前为仿真真值，可注入传感器/估计器
+                    ├── control：注册的控制器（geometric / cascaded_pid / 注入实例）→ 质心力矩或每桨推力
+                    ├── control.BoundedAllocator：每桨有界推力目标 [N]
+                    ├── power.ActuatorEnvelope：电气状态下的已标定指令包线
+                    ├── effects：每物理步的附加质心力/力矩（风、气动阻力、外力扰动）
+                    └── backend：RPS 电机动态 → 每个旋翼独立施力 → 物理步进
+              钩子：轨迹叠加、同步多机位录像、墙钟节拍显示、metrics.json、PNG 图
 ```
 
 | 目录/文件 | 责任 |
 |---|---|
-| `isaac_drone/config.py` | 严格 YAML 解析、重复/未知字段检查、物理量与跨字段验证、本地资产检查 |
-| `isaac_drone/types.py` | 统一状态、质心惯量、轨迹、力/力矩契约 |
-| `isaac_drone/control/` | 位置 PID、SO(3) 姿态控制、完整惯量前馈、有界控制分配 |
-| `isaac_drone/backends/` | Isaac Lab API、四元数转换、真实几何/惯量提取、原生电机与施力 |
-| `isaac_drone/trajectories/` | 运动目标；`hold.py` 可用于联调，`spiral.py` 实现 C4 三维圆柱 helix（历史命名） |
-| `isaac_drone/aero/` | 风场、阵风、随机风、相对气流阻力 |
-| `isaac_drone/disturbances/` | 扰动组合、作用点与参考系转换、时间窗 |
+| `isaac_drone/core/` | 统一状态、质心惯量、轨迹、力/力矩契约（`types`）；SO(3) 数学（`rotations`）；数值校验；插件参数解析（`params`）与注册表（`registry`） |
+| `isaac_drone/config/` | 严格 YAML 解析、`extends` 合并、`--set` 覆盖、重复/未知字段检查、物理量与跨字段验证、本地资产检查 |
+| `isaac_drone/trajectories/` | `SegmentedTrajectory` 框架、hold、C4 三维圆柱 helix、时间律、最短时间规划、可行性筛查、终点完成判据 |
+| `isaac_drone/control/` | 控制器接口与注册表、几何控制（位置 PID、SO(3) 姿态、完整惯量前馈）、级联 PID、推力方向限幅、有界控制分配 |
+| `isaac_drone/effects/` | 风场、阵风、随机风、相对气流阻力；扰动组合、作用点与参考系转换、时间窗 |
 | `isaac_drone/power/` | 电池等效电路、实测负载与执行器包线接口 |
-| `isaac_drone/runtime.py` | 控制降频、物理步调度、复位及异常状态处理 |
-| `isaac_drone/measurements.py` | 每步真实运动数据、完整角动量差分、位置误差及力/力矩阶段区分 |
-| `isaac_drone/telemetry.py` | 配置快照、资产层哈希、JSONL/CSV 运行日志与字段 schema |
-| `isaac_drone/recording.py`、`recording_views.py` | 可选多机位编码、仿真时间采样、同步拼屏与跟随取景 |
-| `isaac_drone/backends/video.py` | 独立 USD 相机与 RTX RGB 同步采集、资源清理 |
-| `scripts/standalone/run_arl.py` | 配置校验、真实物理属性检查、独立仿真入口 |
+| `isaac_drone/runtime/` | 控制降频、物理步调度、起转包络、复位及异常状态处理（`loop`）；运行器与钩子（`runner`、`hooks`） |
+| `isaac_drone/sim/` | 后端/驱动接口（`base`）、原生电机积分复用（`actuation`、`native_thruster`）、CPU 合成对象（`synthetic`）、离线 USD 审计（`usd_audit`） |
+| `isaac_drone/sim/isaaclab/` | Isaac Lab API、四元数转换、真实几何/惯量提取、原生电机与施力（`backend`）；场景、驱动、串流界面刷新（`app`）；独立相机采集（`camera`） |
+| `isaac_drone/telemetry/` | 每步真实运动数据、完整角动量差分、位置误差及力/力矩阶段区分（`measurements`）；配置快照、资产层哈希、JSONL/CSV 与字段 schema（`recorder`） |
+| `isaac_drone/viz/` | 轨迹叠加几何、墙钟节拍、机位取景、多机位同步编码 |
+| `isaac_drone/analysis/` | 指标、分阶段汇总、多次运行对比、扫参、画图 |
+| `isaac_drone/cli.py` | `python -m isaac_drone` 命令行：validate / run / inspect / audit-usd / sweep / compare / summarize / plot |
 
 ## 2. 已确认的资产事实与来源
 
@@ -73,7 +74,7 @@ OpenUSD 的 `diagonalInertia` 是主轴坐标中的惯量，`principalAxes` 是�
 
 ## 4. 配置的可写范围
 
-主入口是 `configs/arl_robot_1.yaml`，每次实验可复制为独立文件并传 `--config`。未识别字段、重复 YAML key、NaN/Inf、错误单位形状、负时间常数都会报错。
+基础配置是 `configs/arl_robot_1.yaml`；每次实验写一个用 `extends` 继承它的文件并传 `--config`，或用 `--set` 单次覆盖（见 [configuration.md](configuration.md)）。未识别字段、重复 YAML key、NaN/Inf、错误单位形状、负时间常数都会报错。
 
 - `simulation`：物理步长、控制降频、渲染降频、重力、设备、随机种子、时长。
 - `recording`：默认关闭；帧率默认 60、每机位 1280×720，可选 `overview/follow/top` 的非空无重复列表。旧配置省略整段时补默认值；启用时帧率不超过物理频率，图像尺寸为正偶数。CLI 可单次覆盖开关、帧率、尺寸和机位。
@@ -114,7 +115,7 @@ usd_overrides:
 
 位置环输出加速度指令；姿态环使用直接力矩增益，带完整 `ω×Jω` 和期望角加速度前馈。轨迹可以给速度、加速度、jerk、snap 及偏航导数。提供 jerk/snap 且未限幅时，参考力的导数采用解析值，反馈部分仍为数值差分；限幅后退回整个力向量的差分，避免对投影后的力使用错误解析导数。位置积分默认关闭，可显式配置，启用时包含积分限制和分配反馈防饱和。
 
-适用范围必须明确：当前姿态控制器面向直立飞行；SO(3) 平滑误差在精确 180° 存在平衡点。没有提供 jerk/snap 时，推力方向导数由历史差分得到，首帧尚无历史，突变参考与噪声会造成导数瞬态。`max_yaw_rate_rad_s` 限制角速度前馈，不会自动把偏航角阶跃规划成平滑转弯。
+适用范围必须明确：当前姿态控制器面向直立飞行；SO(3) 平滑误差在精确 180° 存在平衡点。（以上针对 `geometric` 控制器；`cascaded_pid` 不使用这些前馈。）没有提供 jerk/snap 时，推力方向导数由历史差分得到，首帧尚无历史，突变参考与噪声会造成导数瞬态。`max_yaw_rate_rad_s` 限制角速度前馈，不会自动把偏航角阶跃规划成平滑转弯。
 
 `prepare_step/finish_step` 必须成对调用。任意插件或推进失败后禁止继续重试同一帧，以免重复积分电量或控制器状态；需要完整 reset。仿真暂停不会推进模型，停止后结束本次运行。
 
@@ -143,57 +144,57 @@ usd_overrides:
 3. `ActuatorEnvelope.thrust_bounds_n`，由标定给出当前电压/状态下每桨指令上下限；不假设推力按电压平方变化。
 4. 初始有载电流工作点与每步温度来源。
 
-`MotionControlLoop` 支持注入 `PowerSystem`。通用 CLI 不含未标定的插件，开启电池后会要求使用自定义入口接线。当前包线约束**推力命令**，原生动态仍可能产生滞后输出；这不等价于已经仿真了 ESC、反电动势、铜耗和母线耦合。若包线低于原生最小推力，明确拒绝继续；当前已支持零 RPS 命令按原生下降动态停桨，停转输出为零；但电池失电的策略、母线耦合和原生下限不兼容时的运行决策仍需专门插件，不能用残留的 0.1 N 假装已经关机。
+`MotionControlLoop` 支持注入 `PowerSystem`。命令行不含未标定的插件，开启电池后会要求使用自定义入口接线。当前包线约束**推力命令**，原生动态仍可能产生滞后输出；这不等价于已经仿真了 ESC、反电动势、铜耗和母线耦合。若包线低于原生最小推力，明确拒绝继续；当前已支持零 RPS 命令按原生下降动态停桨，停转输出为零；但电池失电的策略、母线耦合和原生下限不兼容时的运行决策仍需专门插件，不能用残留的 0.1 N 假装已经关机。
 
 ## 8. 运行与验证
 
 普通 Python 环境需要 NumPy、PyYAML；测试需要 pytest。可在自己的环境中以 editable 方式安装项目：
 
 ```bash
-python -m pip install -e '.[test]'
-python -m pytest -q tests
-python scripts/standalone/run_arl.py --validate
+python -m pip install -e '.[dev]'
+python -m pytest -q
+python -m isaac_drone validate
 ```
 
 离线 USD 审计还需 `usd-core`（`pip install -e '.[usd]'`）；在不启动 Isaac Sim 的情况下可读取真实资产并查看未求值属性：
 
 ```bash
-python scripts/standalone/inspect_arl_asset.py
+python -m isaac_drone audit-usd
 ```
 
 在已经正确安装依赖的 Isaac Lab 环境中（服务器激活 `env_isaacsim` 后），从本仓库根目录运行。Isaac Lab 3.0 已去掉 `--headless`，无画面运行用 `--visualizer none`：
 
 ```bash
-python scripts/standalone/run_arl.py --inspect --visualizer none
-python scripts/standalone/run_arl.py --visualizer none --duration 10
+python -m isaac_drone inspect --visualizer none
+python -m isaac_drone run --backend isaaclab --visualizer none --duration 10
 ```
 
-WebRTC 串流用 `--livestream 1`（公网，`PUBLIC_IP` 指定服务器 IP）。Isaac Lab 3.0 把串流主机视为 headless，步进时不会调用 `app.update()`，所以串流时入口脚本在每个渲染步自行刷新 Kit 界面，并在刷新期间关闭 `playSimulations`，不额外推进物理。`--wait-for-start` 在场景加载后保持界面刷新、不推进物理，终端按回车后才开始任务。
+`inspect` 加载 PhysX 实际属性并打印分配矩阵/质量/惯量/采样参数，然后退出，不执行飞行控制。代码不会自动下载 29GB 运行环境，也不会切换到另一个机型。
 
-有画面（串流或本地窗口）时，`isaac_drone/playback.py` 按墙钟对齐仿真时间，默认 `--playback-speed 1` 即真实时间；`0` 关闭对齐。每个渲染步：仿真超前就等待；刷新界面比帧间隔慢、仿真落后超过 50 ms 时跳过该帧，让物理追上，但至少每 0.25 s 画一帧。结束事件 `finished.playback` 记录墙钟时长、实际倍速、已画/跳过帧数和平均刷新耗时；若物理和记录本身就慢于实时，这里会如实显示达不到的倍速。`isaac_drone/visualization.py` 在 `/World/Visuals` 下创建纯显示用的 USD 几何（不带任何物理/碰撞 API）：绿色虚线为参考质心轨迹，红色实线为实际质心轨迹（每移动 5 mm 记一点，在渲染帧写入），绿色小球为当前时刻的参考点；`--no-path-overlay` 关闭。无画面且不录制时不创建这些几何，也不做墙钟对齐；离屏录制时也可保留轨迹叠加。
+WebRTC 串流用 `--livestream 1`（公网，`PUBLIC_IP` 指定服务器 IP）。Isaac Lab 3.0 把串流主机视为 headless，步进时不会调用 `app.update()`，所以串流时 `sim/isaaclab/app.py` 在每个渲染步自行刷新 Kit 界面，并在刷新期间关闭 `playSimulations`，不额外推进物理。`--wait-for-start` 在场景加载后保持界面刷新、不推进物理，终端按回车后才开始任务。
 
-视频录制位于独立入口的展示/输出层，不接入 `MotionControlLoop` 或动力学后端。`--record-video` 在 AppLauncher 启动前检查可选 `imageio-ffmpeg` 及编码器，并启用 `enable_cameras`（不启动 Isaac Lab 自带的 gym 录像链路）。`IsaacCameraRig` 为选定机位创建独立相机和 render product；全景按参考路径取景，跟随/俯视按每步实际质心定位。每次采集统一更新相机，调用 `sim.forward()` 同步 Fabric，再临时关闭 `playSimulations` 刷新一次 Kit，读取所有 RGB；不调用物理 step。非采集时暂停这些 render product，退出释放自身资源。
+显示、录像、指标和画图都是运行器（`runtime/runner.py`）的钩子（`runtime/hooks.py`），不改变物理步进、控制时序和日志。有画面（串流或本地窗口）时，`DisplayHook` 与 `viz/pacing.py` 按墙钟对齐仿真时间，默认 `--playback-speed 1` 即真实时间；`0` 关闭对齐。每个渲染步：仿真超前就等待；刷新界面比帧间隔慢、仿真落后超过 50 ms 时跳过该帧，让物理追上，但至少每 0.25 s 画一帧。结束事件 `finished.playback` 记录墙钟时长、实际倍速、已画/跳过帧数和平均刷新耗时；若物理和记录本身就慢于实时，这里会如实显示达不到的倍速。`viz/overlay.py` 在 `/World/Visuals` 下创建纯显示用的 USD 几何（不带任何物理/碰撞 API）：绿色虚线为参考质心轨迹，红色实线为实际质心轨迹（每移动 5 mm 记一点，在渲染帧写入），绿色小球为当前时刻的参考点；`--no-path-overlay` 关闭。无画面且不录制时不创建这些几何，也不做墙钟对齐；离屏录制时也可保留轨迹叠加。
 
-`MultiViewRecorder` 以整数帧索引计算 `index/fps` 采样时刻，与 `render_interval`、墙钟显示节流分离。初始化相机/等待输入不编码；从任务 t=0 起采样，在到达采样时刻的物理步取图，终点处仅补齐早于终点的采样时刻。每次图像同时送入独立 MP4 与 `combined.mp4`，同步拼屏不经过事后时间匹配。编码器采用流式 FFmpeg/H.264（[imageio-ffmpeg 提供可执行文件](https://github.com/imageio/imageio-ffmpeg)），不会将整个实验的原始帧堆积在内存中。`video_frames.jsonl` 记录编码帧索引/视频时间/实际仿真采样时间；结束/中止事件记录各文件帧数及编码状态。`ExitStack` 在正常完成、仿真停止及异常（含 Ctrl+C）时关闭全部采集和编码资源。用法见 [README 的录制章节](../README.md#可选多机位视频录制)。
+视频录制（`VideoHook`）不接入 `MotionControlLoop` 或动力学后端。`--record-video` 在 AppLauncher 启动前检查可选 `imageio-ffmpeg` 及编码器，并启用 `enable_cameras`（不启动 Isaac Lab 自带的 gym 录像链路）。`IsaacCameraRig`（`sim/isaaclab/camera.py`）为选定机位创建独立相机和 render product；全景按参考路径取景，跟随/俯视按每步实际质心定位。每次采集统一更新相机，调用 `sim.forward()` 同步 Fabric，再临时关闭 `playSimulations` 刷新一次 Kit，读取所有 RGB；不调用物理 step。非采集时暂停这些 render product，退出释放自身资源。
 
-也可以直接使用服务器现有 Isaac Lab Python 环境运行同一个脚本。代码不会自动下载 29GB 运行环境，也不会切换到另一个机型。`--inspect` 会加载 PhysX 实际属性并打印分配矩阵/质量/惯量/采样参数，然后退出，不执行飞行控制。
+`MultiViewRecorder`（`viz/video.py`）以整数帧索引计算 `index/fps` 采样时刻，与 `render_interval`、墙钟显示节流分离。初始化相机/等待输入不编码；从任务 t=0 起采样，在到达采样时刻的物理步取图，终点处仅补齐早于终点的采样时刻。每次图像同时送入独立 MP4 与 `combined.mp4`，同步拼屏不经过事后时间匹配。编码器采用流式 FFmpeg/H.264（[imageio-ffmpeg 提供可执行文件](https://github.com/imageio/imageio-ffmpeg)），不会将整个实验的原始帧堆积在内存中。`video_frames.jsonl` 记录编码帧索引/视频时间/实际仿真采样时间；结束/中止事件记录各文件帧数及编码状态。运行器在正常完成、仿真停止及异常（含 Ctrl+C）时按相反顺序关闭全部钩子资源（相机先于编码器）。
 
-运行结果默认写到 `runs/<UTC时间_唯一编号>/`，包含配置快照、所有本地 USD 层 SHA256、实际物理参数、`telemetry.jsonl`、`basic.csv` 和 `telemetry_schema.json`。默认每物理步记录一次（当前200 Hz），包含位置、速度、加速度、四电机转速、力/力矩及位置误差；日志区分期望、分配结果、原生电机实际输出、附加力与运动推导的净作用。禁用电池记录 null，不记录虚构 SOC。完整字段和时间语义见 [telemetry.md](telemetry.md)。
+运行结果默认写到 `runs/<UTC时间_唯一编号>/`，包含配置快照、实际物理参数、任务阶段时间表、git commit 与命令行、`telemetry.jsonl`、`basic.csv`、`telemetry_schema.json` 和 `metrics.json`；isaaclab 后端另记录所有本地 USD 层 SHA256。默认每物理步记录一次（当前200 Hz），包含位置、速度、加速度、四电机转速、力/力矩及位置误差；日志区分期望、分配结果、原生电机实际输出、附加力与运动推导的净作用。禁用电池记录 null，不记录虚构 SOC。完整字段和时间语义见 [telemetry.md](telemetry.md)。
 
 三维 helix 入口：
 
 ```bash
-python scripts/standalone/helix_ascent.py --validate
+python -m isaac_drone validate --config configs/helix.yaml
 # 然后在完整仿真 Python 环境中运行（无画面加 --visualizer none）
-python scripts/standalone/helix_ascent.py
+python -m isaac_drone run --backend isaaclab --config configs/helix.yaml
 ```
 
-默认使用 `configs/arl_robot_1_helix.yaml`；`spiral_ascent.py` 兼容相同任务。`trajectory.kind: helix` 和旧名 `spiral` 都表示三维圆柱螺旋，参数段名仍为 `trajectory.spiral`。起点由 reset 后真实质心确定，参考经过原地垂直起飞、恒定半径螺旋上升、平滑减速、无限期终点 hold。参考 C4 连续并提供解析四阶导数，数学推导和约束说明见 [spiral_math.md](spiral_math.md)。
+起点由 reset 后真实质心确定；`vehicle.launch.spin_up_s` 的起转阶段保持起点、电机指令按平滑包络放大，之后参考经过原地垂直起飞、恒定半径螺旋上升、平滑减速、无限期终点 hold。参考 C4 连续并提供解析四阶导数，数学推导和约束说明见 [spiral_math.md](spiral_math.md)。
 
-运行前检查实际推力上下限下的悬停可行性、解析最大偏航速率及离散参考采样点的力矩/倾角可行性；这些检查不能替代有限电机响应、接触、扰动下的闭环验飞。`mission.py` 每物理步用真实状态判定连续悬停时间，超时失败不会被迟到的状态重写。正常达到终点以后继续运行反馈控制。JSONL 的 `mission` 给出容差、停留时间和成功/超时状态，`finished.success` 是整个运行的最终判定。
+运行前检查实际推力上下限下的悬停可行性、解析最大偏航速率及离散参考采样点的力矩/倾角可行性；这些检查不能替代有限电机响应、接触、扰动下的闭环验飞。`trajectories/completion.py` 每物理步用真实状态判定连续悬停时间，超时失败不会被迟到的状态重写。正常达到终点以后继续运行反馈控制。JSONL 的 `mission` 给出容差、停留时间和成功/超时状态，`finished.success` 是整个运行的最终判定。
 
 ## 9. 本次验证的边界
 
-已执行普通 Python 数值/契约测试、配置校验，并使用实际 USD 解析检查结构和参数。测试覆盖非零质心、非对角惯量、旋翼顺序、力矩作用点、分配饱和、复位与时间配对、扰动和电池能量等。
+已执行普通 Python 数值/契约测试、配置校验，并使用实际 USD 解析检查结构和参数。`tests/test_golden_regression.py` 用 CPU 合成对象锁定重构前的闭环轨迹（helix 20 s、hold 5 s），任何改变飞行行为的修改都会被发现。测试覆盖非零质心、非对角惯量、旋翼顺序、力矩作用点、分配饱和、复位与时间配对、扰动和电池能量等。
 
 当前开发机器没有安装 Isaac Sim、Torch、Warp 完整运行栈，因此**尚未完成真实 PhysX 端到端悬停验飞**。假对象后端测试不替代该验证；提供 `--inspect` 和 `hold` 入口用于服务器后续实测。现有控制增益来自上游范围，尚未针对实际资产重新调参；没有声称这些增益已保证稳定飞行。

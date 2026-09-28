@@ -1,6 +1,6 @@
 # 三维圆柱螺旋上升（Helix）的轨迹与控制推导
 
-本实现生成的是**半径恒定、绕竖直轴旋转、同时持续爬升的三维圆柱螺旋线（helix）**。它的水平投影为圆，竖直投影持续升高；半径不会随时间扩大。文件名 `spiral.py` 和 `SpiralTrajectory` 保留旧入口，`HelixTrajectory` 是同一实现的清晰别名。配置 `kind: helix` 与兼容名称 `spiral` 使用同一条三维轨迹，参数继续放在 `trajectory.spiral` 段。
+本实现生成的是**半径恒定、绕竖直轴旋转、同时持续爬升的三维圆柱螺旋线（helix）**。它的水平投影为圆，竖直投影持续升高；半径不会随时间扩大。实现为 `isaac_drone/trajectories/helix.py` 的 `HelixTrajectory`（`SegmentedTrajectory` 的子类：`takeoff` 与 `helix` 两段），配置为 `trajectory: {kind: helix, ...}`（文档名 spiral_math 为历史沿用）。
 
 这里推导的是控制参考，不能据此声称真实无人机完全沿曲线飞行。实际运动还受完整刚体动力学、控制误差、电机滞后、推力饱和、地面接触及已启用扰动影响。下面的参数和示例是工程任务设定，不是 ARL 实机标定结果。
 
@@ -12,14 +12,14 @@
 
 | 阶段 | 相对复位时刻的区间 | 参考行为 |
 |---|---|---|
-| `delay` | $[0,T_d)$ | 保持 $p_0$ 和复位时实际偏航 |
+| `spin_up`（控制循环） | $[0,T_d)$ | 保持 $p_0$ 和复位时实际偏航；$T_d$ = `vehicle.launch.spin_up_s` |
 | `takeoff` | $[T_d,T_d+T_o)$ | 原地竖直上升 $h$，平滑调整偏航 |
-| `spiral` | $[T_d+T_o,T_d+T_o+T_h)$ | 半径恒定的三维圆柱螺旋上升 |
+| `helix` | $[T_d+T_o,T_d+T_o+T_h)$ | 半径恒定的三维圆柱螺旋上升 |
 | `hold` | $[T_d+T_o+T_h,\infty)$ | 永久保持终点位置及最终偏航 |
 
-`phase()` 的 `spiral` 返回值也是兼容名称，指的仍然是三维 helix。`mission_duration_s` 返回 $T_d+T_o+T_h$，不包含无限期保持时间。到达终点只意味着参考进入保持阶段，**不会关闭电机或停止控制器**。
+轨迹本身从 $T_d$ 开始（`reset(state, start_time_s=T_d)`），`phase()` 返回 `takeoff` / `helix` / `hold`，起转阶段 `spin_up` 由控制循环标注。`motion_duration_s` 返回 $T_o+T_h$，不包含起转和无限期保持时间。到达终点只意味着参考进入保持阶段，**不会关闭电机或停止控制器**。
 
-`start_delay_s` 只是参考时间平移。当前运行入口在延时期间施加转速启动包络；接触稳定判定和自动起飞许可门控尚未实现。轨迹模块不操作电机、不推进物理时间，也不修改状态。
+起转时长 `vehicle.launch.spin_up_s` 只是参考时间平移：轨迹在起转结束时刻开始，起转期间参考保持起点，控制循环施加转速启动包络；接触稳定判定和自动起飞许可门控尚未实现。轨迹模块不操作电机、不推进物理时间，也不修改状态。
 
 ## 2. 九次平滑进度函数的来源
 
@@ -277,23 +277,24 @@ $$
 
 ## 9. 工程示例与接口
 
-示例：延时 2 s；原地起飞 1 m、用时 4 s；半径 1 m、旋转 2 圈、额外上升 3 m、螺旋阶段 24 s。运动参考在 30 s 后进入永久保持，终点比初始实际质心高 4 m。螺旋路径长度约 12.92 m，速度峰值约 1.325 m/s；tangent 模式的螺旋偏航速率峰值约 1.289 rad/s。这些数值需要结合电机能力、倾角限制和验证结果进一步调整，不是已经完成的实机标定。
+示例：起转 2 s；原地起飞 1 m、用时 4 s；半径 1 m、旋转 2 圈、额外上升 3 m、螺旋阶段 24 s。运动参考在 30 s 后进入永久保持，终点比初始实际质心高 4 m。螺旋路径长度约 12.92 m，速度峰值约 1.325 m/s；tangent 模式的螺旋偏航速率峰值约 1.289 rad/s。这些数值需要结合电机能力、倾角限制和验证结果进一步调整，不是已经完成的实机标定。
 
 ```python
-from isaac_drone.trajectories.spiral import HelixTrajectory
+from isaac_drone.trajectories import build_trajectory
 
-trajectory = HelixTrajectory(config["trajectory"]["spiral"])
-trajectory.reset(actual_initial_state)
+trajectory = build_trajectory(config["trajectory"])   # {kind: helix, ...}
+trajectory.reset(actual_initial_state, start_time_s=spin_up_s)
+# 时长为 null 的段需先由 min_time.plan_minimum_time 规划，否则 sample 会报错
 reference = trajectory.sample(current_simulation_time_s)
 phase = trajectory.phase(current_simulation_time_s)
 endpoint = trajectory.endpoint_position_w
 ```
 
-`sample()` 是不推进内部时间的纯采样接口，相同时间返回相同参考，允许回查记录。`time_s` 是绝对仿真时间，不能早于最近一次 reset 的时间；再次 reset 会建立新的实际起点和时间原点。配置检查入口为 `validate_spiral_config()`。独立数学回归位于 `tests/test_spiral.py`，包含四阶解析导数校验、端点连续性、正反方向、偏航连续性和速度峰值；这些测试不是 Isaac Sim 实际飞行验证的替代品。
+`sample()` 是不推进内部时间的纯采样接口，相同时间返回相同参考，允许回查记录。`time_s` 是绝对仿真时间，不能早于最近一次 reset 的时间；再次 reset 会建立新的实际起点和时间原点。参数由 `HelixParams` 严格解析（`TRAJECTORIES.parse`）。独立数学回归位于 `tests/test_helix.py`，包含四阶解析导数校验、端点连续性、正反方向、偏航连续性和速度峰值；这些测试不是 Isaac Sim 实际飞行验证的替代品。
 
 ## 10. 起飞前的必要可行性筛查
 
-`validate_helix_feasibility()` 使用已经根据实际初态 reset 的轨迹、真实质量、完整质心惯量、实际分配矩阵和当前每桨推力上下限，拒绝明显无法执行的计划。它不会自动修改任务参数，也不会为了让检查通过而假设理想电机。
+`validate_trajectory_feasibility()` 使用已经根据实际初态 reset 的轨迹、真实质量、完整质心惯量、实际分配矩阵和当前每桨推力上下限，拒绝明显无法执行的计划。它不会自动修改任务参数，也不会为了让检查通过而假设理想电机。
 
 检查分为三部分：
 
@@ -471,11 +472,11 @@ $$
 
 是围绕整机质心汇总的诊断值，**不会再次整体提交到根刚体**。否则会把已通过四个旋翼提交的力重复施加。真实净合力还包含重力、接触和原生阻尼等物理求解项，应与日志中的运动推导净力/净力矩区分。
 
-本节实现依据为 `isaac_drone/actuation.py`、`isaac_drone/backends/isaaclab.py`、`isaac_drone/control/allocation.py` 以及本地 `IsaacLab/source/isaaclab_contrib/isaaclab_contrib/actuators/thruster.py`。这组公式描述当前实际执行路径，不以理想瞬时电机替换原生动态。
+本节实现依据为 `isaac_drone/sim/actuation.py`、`isaac_drone/sim/isaaclab/backend.py`、`isaac_drone/control/allocation.py` 以及本地 `IsaacLab/source/isaaclab_contrib/isaaclab_contrib/actuators/thruster.py`。这组公式描述当前实际执行路径，不以理想瞬时电机替换原生动态。
 
 ## 16. 最短时间：加速—巡航—减速时间律与推力包线规划
 
-`takeoff_duration_s` 或 `spiral_duration_s` 为 `null` 时，该阶段几何路径不变（竖直线段或第 4 节的 helix），只把进度 $\sigma(t)\in[0,1]$ 换成下面的时间律，并在复位后由 `isaac_drone/trajectories/min_time.py` 按实际机体参数求出最短时长。目标是“最快飞完”，推力利用率是约束而不是目标。
+`takeoff_duration_s` 或 `helix_duration_s` 为 `null` 时，该阶段几何路径不变（竖直线段或第 4 节的 helix），只把进度 $\sigma(t)\in[0,1]$ 换成下面的时间律，并在复位后由 `isaac_drone/trajectories/min_time.py` 按实际机体参数求出最短时长。目标是“最快飞完”，推力利用率是约束而不是目标。
 
 ### 16.1 时间律
 

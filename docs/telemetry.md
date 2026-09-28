@@ -5,7 +5,10 @@
 - `basic.csv`：每行一个已完成物理步，列名包含分量和单位，可用于 Excel、MATLAB、Python 绘图。
 - `telemetry.jsonl`：保留完整的步前/步后状态、控制输入、实际执行器状态和基础数据。
 - `telemetry_schema.json`：CSV 列与 JSON 字段的对应关系、单位、参考系、采样时间与来源说明。
-- `config.json` / `metadata.json`：实际配置、USD 层哈希、机型属性和模型边界。
+- `config.json` / `metadata.json`：实际配置（已展开 `extends` 与 `--set`）、后端描述、USD 层哈希（isaaclab）、机型属性、模型边界、任务阶段时间表 `mission_phases`、git commit 与命令行 `provenance`。
+- `metrics.json`：由 `telemetry.jsonl` 计算的整体和分阶段指标（`isaac_drone/analysis/metrics.py`），供 `summarize`、`compare`、`sweep` 共用。
+
+两个后端（`isaaclab`、`synthetic`）写出相同格式；合成后端没有 PhysX 求解器加速度，相应字段为空。
 
 ## 字段对应
 
@@ -53,8 +56,8 @@
 每次飞行结束后自动在 `runs/<运行目录>/plots/` 生成英文 PNG；CSV/JSONL 仍是原始数据，图像只是派生视图。也可以对任意一次运行（包括拷回本地的目录）重新生成，只需 NumPy 和 matplotlib：
 
 ```bash
-python scripts/standalone/plot_run.py                 # 最新一次运行
-python scripts/standalone/plot_run.py runs/<运行目录>  # 指定运行
+python -m isaac_drone plot                  # 最新一次运行
+python -m isaac_drone plot runs/<运行目录>   # 指定运行
 ```
 
 | 文件 | 内容 |
@@ -65,7 +68,7 @@ python scripts/standalone/plot_run.py runs/<运行目录>  # 指定运行
 | `motor_speed.png` / `rotor_thrust.png` | 四个电机转速（rpm）与单桨推力，实际 vs 命令，末行为误差 |
 | `force.png` / `torque.png` | 机体系力/力矩，电机输出 vs 控制需求，末行为误差 |
 
-竖虚线为任务阶段（delay / takeoff / helix / hold）分界。旧版日志缺少的误差列会在画图时用"理想 − 实际"补算，缺少理想值的量只画实际值。
+竖虚线为任务阶段分界（取自 `metadata.json` 的 `mission_phases`，例如 spin_up / takeoff / helix / hold；旧版运行目录按原先的 delay / takeoff / helix / hold 边界）。旧版日志缺少的误差列会在画图时用"理想 − 实际"补算，缺少理想值的量只画实际值。
 
 ## 时间对齐
 
@@ -148,8 +151,8 @@ torque_net_world = Δ(angular_momentum_world) / Δt
 
 当前验证覆盖数值计算、转速状态与单位换算、时间配对、复位、坐标系、JSON/CSV 输出契约；开发机器没有完整 Isaac Sim 运行栈，仍需在服务器实际运行后验证真实日志和飞行表现。
 
-## Helix 任务新增 JSONL 诊断
+## 任务与控制器 JSONL 诊断
 
-`motor_command_rps` 是当步四电机命令（经过启动包络及运行上下限），`backend.commanded_motor_speed_rps` 为执行器接受的目标，`basic.motor_speed_rps` 为动态响应后的实际转速。`startup_fraction` 是 0..1 的起转包络，`motor_command_thrust_n` 对应接受转速的静态推力目标；`allocated_thrust_n` 则保留启动缩放前的闭环分配结果。
+`motor_command_rps` 是当步四电机命令（经过起转包络及运行上下限），`backend.commanded_motor_speed_rps` 为执行器接受的目标，`basic.motor_speed_rps` 为动态响应后的实际转速。`startup_fraction` 是 0..1 的起转包络，`motor_command_thrust_n` 对应接受转速的静态推力目标；`allocated_thrust_n` 则保留启动缩放前的闭环分配结果。
 
-`setpoint.jerk_w`、`setpoint.snap_w` 记录解析参考导数；`controller_force_derivative_source` 说明解析参考/数值反馈或限幅后全数值差分路径。`mission_phase` 为 `delay / takeoff / spiral / hold`，其中 `spiral` 历史名称特指三维 helix。`mission` 保存 post-step 真值误差、连续达标时间、成功及超时标志。这些诊断位于 JSONL；基础 CSV 仍保留导师要求的运动与动力数据字段。
+`setpoint.jerk_w`、`setpoint.snap_w` 记录解析参考导数。`controller` 记录控制器类型 `kind` 及其自带明细：`geometric` 的 `force_derivative_source` 说明解析参考/数值反馈或限幅后全数值差分路径；`cascaded_pid` 的 `velocity_setpoint_w_m_s`、`rate_setpoint_b_rad_s`、`thrust_vector_limited`。姿态/角速度的“理想值”是控制器给出的期望姿态和期望角速度（级联 PID 为其角速度设定）。`mission_phase` 为 `spin_up`（地面起转）及轨迹各段名称，例如 helix 任务为 `spin_up / takeoff / helix / hold`，hold 任务为 `hold`。`mission` 在配置了 `completion` 时保存 post-step 真值误差、连续达标时间、成功及超时标志，否则为 null。这些诊断位于 JSONL；基础 CSV 仍保留导师要求的运动与动力数据字段。
