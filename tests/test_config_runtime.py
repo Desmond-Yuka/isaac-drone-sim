@@ -10,7 +10,7 @@ from isaac_drone.config import ConfigurationError, load_config, validate_config,
 from isaac_drone.runtime import MotionControlLoop
 from isaac_drone.telemetry import RunRecorder
 from isaac_drone.trajectories import HoldTrajectory, SpiralTrajectory
-from isaac_drone.types import MassProperties, VehicleState, Wrench
+from isaac_drone.core.types import MassProperties, VehicleState, Wrench
 
 
 def test_default_config_has_explicit_source_and_local_usd():

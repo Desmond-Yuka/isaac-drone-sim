@@ -1,8 +1,10 @@
 """A constant CoM target for initial closed-loop integration checks."""
 import math
+
 import numpy as np
 
-from isaac_drone.types import TrajectorySetpoint, VehicleState, finite_array
+from isaac_drone.core.types import TrajectorySetpoint, VehicleState
+from isaac_drone.core.validation import finite_array
 
 
 class HoldTrajectory:

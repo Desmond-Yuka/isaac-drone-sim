@@ -29,12 +29,12 @@ import math
 
 import numpy as np
 
-from isaac_drone.control.math import finite_array, finite_scalar
-from isaac_drone.types import MassProperties
-from .feasibility import nominal_requirement
-from .spiral import SpiralTrajectory
-from .timing import CruiseTimeLaw
+from isaac_drone.core.types import MassProperties
+from isaac_drone.core.validation import finite_array, finite_scalar
+from isaac_drone.trajectories.helix import SpiralTrajectory
 
+from .feasibility import nominal_requirement
+from .timing import CruiseTimeLaw
 
 _RAMP_SAMPLES = 33
 _RAMP_TOLERANCE = 2e-3   # relative, on ramp durations and the steady rate limit

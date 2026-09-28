@@ -6,9 +6,9 @@ import pytest
 
 from isaac_drone.trajectories.feasibility import nominal_requirement, validate_helix_feasibility
 from isaac_drone.trajectories.min_time import plan_minimum_time, timing_summary
-from isaac_drone.trajectories.spiral import HelixTrajectory, validate_spiral_config
+from isaac_drone.trajectories.helix import HelixTrajectory, validate_spiral_config
 from isaac_drone.trajectories.timing import CruiseTimeLaw, HermiteTimeLaw, _progress_derivatives, _progress_integral
-from isaac_drone.types import MassProperties, VehicleState
+from isaac_drone.core.types import MassProperties, VehicleState
 
 GRAVITY = np.array([0., 0., -9.81])
 LOWER, UPPER = np.full(4, .1), np.full(4, 10.)

@@ -1,7 +1,7 @@
 """Wall-clock pacing with a fake clock: waits when ahead, skips frames when behind."""
 import pytest
 
-from isaac_drone.playback import RealTimePacer
+from isaac_drone.viz.pacing import RealTimePacer
 
 
 class FakeClock:

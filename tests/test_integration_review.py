@@ -7,7 +7,7 @@ import pytest
 
 from isaac_drone.config import ConfigurationError, assert_flight_ready, load_config
 from isaac_drone.runtime import MotionControlLoop
-from isaac_drone.types import MassProperties, VehicleState, Wrench
+from isaac_drone.core.types import MassProperties, VehicleState, Wrench
 
 
 def physical_matrix(axis=(0.0, 0.0, 1.0)):
@@ -143,7 +143,7 @@ def test_prepare_exception_cannot_retry_partly_advanced_plugin_state_without_res
                                              ("rigid_body_enabled", False)])
 def test_backend_rejects_actual_incompatible_flags_independently_of_yaml(bad_flag, value):
     from types import SimpleNamespace
-    from isaac_drone.backends.isaaclab import ARLBackend
+    from isaac_drone.sim.isaaclab.backend import ARLBackend
     backend = object.__new__(ARLBackend)
     backend.sim = None
     backend.robot = SimpleNamespace(is_fixed_base=False)
@@ -158,7 +158,7 @@ def test_backend_rejects_actual_incompatible_flags_independently_of_yaml(bad_fla
 
 def test_backend_cannot_claim_flight_compatibility_without_physics_audit():
     from types import SimpleNamespace
-    from isaac_drone.backends.isaaclab import ARLBackend
+    from isaac_drone.sim.isaaclab.backend import ARLBackend
     backend = object.__new__(ARLBackend)
     backend.sim = None
     backend.robot = SimpleNamespace(is_fixed_base=False)

@@ -15,10 +15,13 @@ or room temperature is silently inserted. Energy counters start at reset and
 are not estimates of physically remaining energy.
 """
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Protocol, Sequence
+
 import numpy as np
-from isaac_drone.aero.math import finite_scalar, numeric_array, positive_dt
+
+from isaac_drone.core.validation import finite_scalar, numeric_array, positive_dt
 
 
 class BatteryLimitError(ValueError):

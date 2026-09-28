@@ -6,10 +6,10 @@ import types
 import numpy as np
 import pytest
 
-from isaac_drone.backends.isaaclab import ARLBackend, _collision_corners_b, _override
-from isaac_drone.actuation import NativeRpsActuator, thrust_to_motor_speeds
+from isaac_drone.sim.isaaclab.backend import ARLBackend, _collision_corners_b, override_native
+from isaac_drone.sim.actuation import NativeRpsActuator, thrust_to_motor_speeds
 from isaac_drone.sim import native_thruster
-from isaac_drone.types import Wrench
+from isaac_drone.core.types import Wrench
 
 UPSTREAM_SOURCE = native_thruster.find_upstream_source()
 NATIVE_METHODS = (native_thruster.load_upstream_methods(UPSTREAM_SOURCE) if UPSTREAM_SOURCE
@@ -153,16 +153,6 @@ def test_wrench_submission_uses_backend_order_and_shift_to_root_body_com():
     assert np.count_nonzero(force[0, 1:]) == 0
 
 
-def test_deprecated_thrust_entry_only_converts_to_speed_path():
-    backend = make_backend()
-    expected = backend.thrust_to_motor_speeds([0, .01, 2, 20])
-    calls = []
-    backend.apply_motor_speeds = lambda rps, external: calls.append((rps, external))
-    with pytest.warns(DeprecationWarning):
-        backend.apply([0, .01, 2, 20], Wrench.zero())
-    np.testing.assert_allclose(calls[0][0], expected)
-
-
 def test_reset_corrects_rps_target_retaining_native_pose_semantics():
     backend = make_backend()
     backend.reset()
@@ -182,29 +172,29 @@ def test_audit_allows_rank_deficiency_but_flight_does_not():
         backend.apply_motor_speeds(np.full(4, 300.), Wrench.zero())
 
 
-def test_movable_joint_and_unknown_native_override_are_rejected():
+def test_movable_joint_and_unknown_nativeoverride_native_are_rejected():
     backend = make_backend()
     backend.robot.num_joints = 1
     with pytest.raises(ValueError, match="Movable internal"):
         ARLBackend(None, backend.robot, backend.config)
     cfg = types.SimpleNamespace(known=types.SimpleNamespace(value=3))
-    _override(cfg, {"known": {"value": None}})
+    override_native(cfg, {"known": {"value": None}})
     assert cfg.known.value == 3
     with pytest.raises(ValueError, match="Unknown native field"):
-        _override(cfg, {"known": {"typo": 1}})
+        override_native(cfg, {"known": {"typo": 1}})
 
 
 def test_nullable_schema_slots_and_fragments_remain_writable(monkeypatch):
-    import isaac_drone.backends.isaaclab as module
+    import isaac_drone.sim.isaaclab.backend as module
     def factory(name):
         return types.SimpleNamespace(mass=None, density=None, contact_offset=None)
     monkeypatch.setattr(module, "_native_cfg", factory)
     cfg = types.SimpleNamespace(mass_props=None, collision_props=None)
-    _override(cfg, {"mass_props": {"mass": 2.0}, "collision_props": {"contact_offset": .001}})
+    override_native(cfg, {"mass_props": {"mass": 2.0}, "collision_props": {"contact_offset": .001}})
     assert cfg.mass_props.mass == 2.0
     assert cfg.mass_props.density is None
     assert cfg.collision_props.contact_offset == .001
-    _override(cfg, {"mass_props": {"/base_link": [{"_type": "MassCfg", "mass": 1.5}]}})
+    override_native(cfg, {"mass_props": {"/base_link": [{"_type": "MassCfg", "mass": 1.5}]}})
     assert cfg.mass_props["/base_link"][0].mass == 1.5
 
 
@@ -498,7 +488,7 @@ def test_actual_arl_ground_collision_instance_proxy_extent():
 def test_ground_launch_audits_physics_plane_height_not_visual_mesh():
     Usd = pytest.importorskip("pxr.Usd")
     from pxr import Gf, UsdGeom, UsdPhysics
-    from isaac_drone.backends.isaaclab import _ground_plane_height_m
+    from isaac_drone.sim.isaaclab.backend import _ground_plane_height_m
     stage = Usd.Stage.CreateInMemory()
     UsdGeom.SetStageMetersPerUnit(stage, 1.)
     UsdGeom.Xform.Define(stage, "/Ground")

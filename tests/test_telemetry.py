@@ -6,9 +6,9 @@ import json
 import numpy as np
 import pytest
 
-from isaac_drone.measurements import build_basic_record
+from isaac_drone.telemetry.measurements import build_basic_record
 from isaac_drone.telemetry import BASIC_CSV_COLUMNS, RunRecorder
-from isaac_drone.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
+from isaac_drone.core.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
 
 
 def config(flush=1):

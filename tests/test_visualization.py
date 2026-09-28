@@ -2,9 +2,9 @@
 import numpy as np
 import pytest
 
-from isaac_drone.trajectories.spiral import SpiralTrajectory
-from isaac_drone.types import VehicleState
-from isaac_drone.visualization import (
+from isaac_drone.trajectories.helix import SpiralTrajectory
+from isaac_drone.core.types import VehicleState
+from isaac_drone.viz.overlay import (
     PathOverlay, PathTrail, dash_segments, reference_path_points, resample_by_arc_length,
 )
 

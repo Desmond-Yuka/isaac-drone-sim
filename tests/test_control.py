@@ -6,11 +6,11 @@ import numpy as np
 import pytest
 
 from isaac_drone.control import AllocationResult, BoundedAllocator, GeometricController
-from isaac_drone.control.math import (
+from isaac_drone.core.rotations import (
     desired_attitude_kinematics, hat, normalized_derivatives,
     quaternion_to_matrix, rotation_log, vee,
 )
-from isaac_drone.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
+from isaac_drone.core.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
 
 
 def config(**overrides):

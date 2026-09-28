@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 
 from isaac_drone.config import HELIX_CONFIG, load_config, validate_config
-from isaac_drone.mission import SpiralMissionMonitor
-from isaac_drone.types import TrajectorySetpoint, VehicleState
+from isaac_drone.trajectories.completion import SpiralMissionMonitor
+from isaac_drone.core.types import TrajectorySetpoint, VehicleState
 
 
 def sample(time, **kwargs):

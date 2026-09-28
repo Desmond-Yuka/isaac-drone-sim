@@ -10,10 +10,10 @@ import numpy as np
 import pytest
 
 from isaac_drone.config import load_config
-from isaac_drone.control.math import quaternion_to_matrix
-from isaac_drone.measurements import build_basic_record
+from isaac_drone.core.rotations import quaternion_to_matrix
+from isaac_drone.telemetry.measurements import build_basic_record
 from isaac_drone.runtime import MotionControlLoop
-from isaac_drone.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
+from isaac_drone.core.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
 
 
 def mass_properties():

@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from isaac_drone.recording_views import RecordingViews
+from isaac_drone.viz.camera_views import RecordingViews
 
 
 def test_tracking_cameras_follow_actual_position_and_overview_stays_fixed():

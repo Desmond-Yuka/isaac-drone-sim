@@ -8,10 +8,10 @@ import pytest
 
 pytest.importorskip("matplotlib")
 
-from isaac_drone.measurements import build_basic_record
-from isaac_drone.plots import latest_run, load_basic_csv, phase_starts, plot_run
+from isaac_drone.telemetry.measurements import build_basic_record
+from isaac_drone.analysis.plots import latest_run, load_basic_csv, phase_starts, plot_run
 from isaac_drone.telemetry import RunRecorder
-from isaac_drone.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
+from isaac_drone.core.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
 
 HELIX = {"kind": "helix", "spiral": {"start_delay_s": .05, "takeoff_duration_s": .05, "spiral_duration_s": .1}}
 FIGURES = {"trajectory_3d.png", "position.png", "velocity.png", "acceleration.png", "attitude.png",

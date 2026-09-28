@@ -2,8 +2,8 @@
 import numpy as np
 import pytest
 
-from isaac_drone.measurements import build_basic_record
-from isaac_drone.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
+from isaac_drone.telemetry.measurements import build_basic_record
+from isaac_drone.core.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
 
 
 def state(time, pos=(0, 0, 1), vel=(0, 0, 0), omega=(0, 0, 0), quat=(1, 0, 0, 0)):
@@ -135,7 +135,7 @@ def test_missing_ideals_leave_errors_blank_not_zero():
 
 
 def test_matrix_to_quaternion_round_trips_including_half_turns():
-    from isaac_drone.control.math import matrix_to_quaternion, quaternion_to_matrix
+    from isaac_drone.core.rotations import matrix_to_quaternion, quaternion_to_matrix
     rng = np.random.default_rng(0)
     quaternions = [q / np.linalg.norm(q) for q in rng.normal(size=(50, 4))]
     quaternions += [np.array([0., 1, 0, 0]), np.array([0., 0, 1, 0]), np.array([0., 0, 0, 1])]

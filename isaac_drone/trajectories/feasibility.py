@@ -12,11 +12,12 @@ import math
 import numpy as np
 
 from isaac_drone.control.allocation import BoundedAllocator
-from isaac_drone.control.math import desired_attitude_kinematics, finite_array, finite_scalar
-from isaac_drone.types import MassProperties, Wrench
-from .spiral import SpiralTrajectory, validate_spiral_config
-from .timing import HermiteTimeLaw
+from isaac_drone.core.rotations import desired_attitude_kinematics
+from isaac_drone.core.types import MassProperties, Wrench
+from isaac_drone.core.validation import finite_array, finite_scalar
+from isaac_drone.trajectories.helix import SpiralTrajectory, validate_spiral_config
 
+from .timing import HermiteTimeLaw
 
 _RESIDUAL_RTOL = 1e-7
 _RESIDUAL_ATOL = 1e-9

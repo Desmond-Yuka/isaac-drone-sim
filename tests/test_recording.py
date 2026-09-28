@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from isaac_drone.recording import MultiViewRecorder, _FFmpegWriter, ensure_video_dependencies
+from isaac_drone.viz.video import MultiViewRecorder, _FFmpegWriter, ensure_video_dependencies
 
 
 def config(**changes):

@@ -5,10 +5,10 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from isaac_drone.control.math import desired_attitude_kinematics
+from isaac_drone.core.rotations import desired_attitude_kinematics
 from isaac_drone.trajectories.feasibility import validate_helix_feasibility
-from isaac_drone.trajectories.spiral import HelixTrajectory
-from isaac_drone.types import MassProperties, VehicleState
+from isaac_drone.trajectories.helix import HelixTrajectory
+from isaac_drone.core.types import MassProperties, VehicleState
 
 
 def path(**changes):

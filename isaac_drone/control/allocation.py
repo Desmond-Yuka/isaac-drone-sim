@@ -7,8 +7,8 @@ from itertools import product
 
 import numpy as np
 
-from isaac_drone.types import Wrench
-from .math import finite_array, finite_scalar
+from isaac_drone.core.types import Wrench
+from isaac_drone.core.validation import finite_array, finite_scalar
 
 
 @dataclass(frozen=True)

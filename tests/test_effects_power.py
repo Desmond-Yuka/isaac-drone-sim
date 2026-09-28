@@ -2,9 +2,9 @@
 from __future__ import annotations
 import numpy as np
 import pytest
-from isaac_drone.types import VehicleState, Wrench
-from isaac_drone.aero import BodyDrag, Gust, UniformGustWind
-from isaac_drone.disturbances import ConstantWrench, EffectsPipeline, build_effects
+from isaac_drone.core.types import VehicleState, Wrench
+from isaac_drone.effects import BodyDrag, Gust, UniformGustWind
+from isaac_drone.effects import ConstantWrench, EffectsPipeline, build_effects
 from isaac_drone.power import (BatteryLimitError, EquivalentCircuitBattery,
     ModelValidityError, PowerSystem, RCBranch, ThrustBounds, build_battery,
     build_power, validate_power_config)

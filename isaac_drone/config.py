@@ -3,15 +3,15 @@ validated against the installed Isaac Lab classes by the backend builder.
 """
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
-from collections.abc import Mapping
-import math
 
 import numpy as np
 import yaml
 
-from .types import finite_array
+from isaac_drone.core.validation import finite_array
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "arl_robot_1.yaml"
@@ -236,8 +236,8 @@ def validate_config(config: dict) -> None:
         _array(trajectory["hold"]["position_w_m"], (3,), "trajectory.hold.position_w_m")
     if trajectory["hold"]["yaw_rad"] is not None:
         _number(trajectory["hold"]["yaw_rad"], "trajectory.hold.yaw_rad")
-    from .trajectories.spiral import validate_spiral_config
-    from .mission import validate_completion_config
+    from isaac_drone.trajectories.completion import validate_completion_config
+    from isaac_drone.trajectories.helix import validate_spiral_config
     validate_spiral_config(trajectory["spiral"])
     validate_completion_config(trajectory["completion"])
     if trajectory["kind"] in ("spiral", "helix"):
@@ -268,8 +268,8 @@ def validate_config(config: dict) -> None:
         raise ConfigurationError("logging.directory must be nonempty")
     for field in ("every_n_steps", "flush_every_n_records"):
         _integer(log[field], f"logging.{field}", 1)
-    from .disturbances import build_effects
-    from .power import validate_power_config
+    from isaac_drone.effects import build_effects
+    from isaac_drone.power import validate_power_config
     build_effects(config["effects"])
     validate_power_config(config["power"])
 

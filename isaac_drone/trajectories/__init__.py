@@ -1,6 +1,7 @@
 """Motion objectives independent of low-level control and physics."""
+from isaac_drone.trajectories.helix import SpiralTrajectory
+
 from .hold import HoldTrajectory
-from .spiral import SpiralTrajectory
 
 HelixTrajectory = SpiralTrajectory
 

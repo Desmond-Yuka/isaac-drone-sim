@@ -11,9 +11,11 @@ from collections.abc import Mapping
 
 import numpy as np
 
-from isaac_drone.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
+from isaac_drone.core.rotations import desired_attitude_kinematics, quaternion_to_matrix, vee
+from isaac_drone.core.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
+from isaac_drone.core.validation import finite_array, finite_scalar
+
 from .allocation import AllocationResult
-from .math import desired_attitude_kinematics, finite_array, finite_scalar, quaternion_to_matrix, vee
 
 
 class GeometricController:

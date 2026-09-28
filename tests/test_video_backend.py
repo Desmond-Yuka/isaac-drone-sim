@@ -5,7 +5,7 @@ import types
 import numpy as np
 import pytest
 
-from isaac_drone.backends.video import IsaacCameraRig
+from isaac_drone.sim.isaaclab.camera import IsaacCameraRig
 
 
 PLAY_SETTING = "/app/player/playSimulations"

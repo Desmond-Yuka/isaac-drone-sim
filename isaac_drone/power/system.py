@@ -6,14 +6,25 @@ no rotor-speed or thrust scaling with battery voltage is assumed: an injected
 actuator-envelope calibration provides the allowable thrust for each motor.
 """
 from __future__ import annotations
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
+
 import numpy as np
-from isaac_drone.types import VehicleState
-from isaac_drone.aero.math import finite_scalar, numeric_array
-from .battery import (BatteryLimitError, BatteryState, EquivalentCircuitBattery,
-                      ModelValidityError, PowerModel, RCBranch, validate_ocv_table)
+
+from isaac_drone.core.types import VehicleState
+from isaac_drone.core.validation import finite_scalar, numeric_array
+
+from .battery import (
+    BatteryLimitError,
+    BatteryState,
+    EquivalentCircuitBattery,
+    ModelValidityError,
+    PowerModel,
+    RCBranch,
+    validate_ocv_table,
+)
 
 
 @dataclass(frozen=True)

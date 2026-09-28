@@ -6,8 +6,9 @@ import numpy as np
 from numpy.polynomial import Polynomial
 import pytest
 
-from isaac_drone.trajectories.spiral import SpiralTrajectory, validate_spiral_config, _progress_derivatives
-from isaac_drone.types import VehicleState
+from isaac_drone.trajectories.helix import SpiralTrajectory, validate_spiral_config
+from isaac_drone.trajectories.timing import _progress_derivatives
+from isaac_drone.core.types import VehicleState
 
 
 def config(**changes):
@@ -231,5 +232,5 @@ def test_caller_configuration_mutation_does_not_change_mission():
 
 
 def test_helix_name_is_the_same_three_dimensional_trajectory():
-    from isaac_drone.trajectories.spiral import HelixTrajectory
+    from isaac_drone.trajectories.helix import HelixTrajectory
     assert HelixTrajectory is SpiralTrajectory

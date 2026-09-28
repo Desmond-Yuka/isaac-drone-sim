@@ -14,7 +14,7 @@ import pytest
 
 from isaac_drone.config import load_config
 from isaac_drone.runtime import MotionControlLoop
-from scripts.standalone.validate_helix_numerics import SyntheticRigidBody
+from isaac_drone.sim.synthetic import SyntheticBackend
 
 ROOT = Path(__file__).resolve().parents[1]
 GOLDEN = np.load(Path(__file__).parent / "data" / "golden_synthetic.npz")
@@ -24,7 +24,7 @@ TOLERANCE = {"rtol": 1e-9, "atol": 1e-9}
 
 def fly(name, steps):
     config = load_config(CONFIGS[name])
-    plant = SyntheticRigidBody(config)
+    plant = SyntheticBackend(config)
     loop = MotionControlLoop(config, plant)
     loop.reset()
     stride = int(GOLDEN[f"{name}_stride"])
