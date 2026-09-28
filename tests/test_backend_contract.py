@@ -1,6 +1,5 @@
 """Bridge contract tests using fake bodies; these do not validate Isaac Sim."""
 
-import ast
 from pathlib import Path
 import types
 
@@ -9,7 +8,12 @@ import pytest
 
 from isaac_drone.backends.isaaclab import ARLBackend, _collision_corners_b, _override
 from isaac_drone.actuation import NativeRpsActuator, thrust_to_motor_speeds
+from isaac_drone.sim import native_thruster
 from isaac_drone.types import Wrench
+
+UPSTREAM_SOURCE = native_thruster.find_upstream_source()
+NATIVE_METHODS = (native_thruster.load_upstream_methods(UPSTREAM_SOURCE) if UPSTREAM_SOURCE
+                  else native_thruster.TRANSCRIBED_METHODS)
 
 
 CANONICAL = ["back_left_prop", "back_right_prop", "front_left_prop", "front_right_prop"]
@@ -20,14 +24,10 @@ def make_actuator(indices, kf, initial_rps=None, bounds=(.1, 10.), scheme="rk4",
 
     This verifies reuse/maths without importing Isaac or claiming CUDA/PhysX
     validation. Native tensor construction and GPU execution remain untested.
+    Without an upstream checkout the package's NumPy transcription is used;
+    test_transcription_matches_upstream_source then documents the skip.
     """
-    source = Path(__file__).resolve().parents[1] / "IsaacLab/source/isaaclab_contrib/isaaclab_contrib/actuators/thruster.py"
-    tree = ast.parse(source.read_text())
-    cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Thruster")
-    methods = {"motor_model_rate", "rk4_integration", "discrete_mixing_factor", "continuous_mixing_factor"}
-    namespace = {"torch": types.SimpleNamespace(Tensor=np.ndarray, clamp=np.clip)}
-    exec(compile(ast.Module(body=[node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name in methods],
-                            type_ignores=[]), str(source), "exec"), namespace)
+    methods = NATIVE_METHODS
     kf = np.asarray(kf, dtype=float).reshape(1, -1)
     n = kf.shape[1]
     initial = np.zeros_like(kf) if initial_rps is None else np.asarray(initial_rps).reshape(1, n)
@@ -38,7 +38,7 @@ def make_actuator(indices, kf, initial_rps=None, bounds=(.1, 10.), scheme="rk4",
         tau_inc_s=np.full((1, n), .06), tau_dec_s=np.full((1, n), .005),
         max_rate=np.full((1, n), rate), rate_calls=0, mixing_calls=0)
     for name in methods:
-        setattr(actuator, name, types.MethodType(namespace[name], actuator))
+        setattr(actuator, name, types.MethodType(methods[name], actuator))
     native_rate = actuator.motor_model_rate
     def counted_rate(error, mixing):
         actuator.rate_calls += 1
@@ -515,3 +515,21 @@ def test_ground_launch_audits_physics_plane_height_not_visual_mesh():
     plane.AddRotateXOp().Set(10.)
     with pytest.raises(ValueError, match="horizontal physical"):
         _ground_plane_height_m(stage, "/Ground")
+
+
+@pytest.mark.skipif(UPSTREAM_SOURCE is None, reason="Isaac Lab checkout not found (set ISAACLAB_PATH)")
+def test_transcription_matches_upstream_source():
+    upstream = native_thruster.load_upstream_methods(UPSTREAM_SOURCE)
+    rng = np.random.default_rng(0)
+    for name in ("rk4", "euler"):
+        fake = types.SimpleNamespace(cfg=types.SimpleNamespace(dt=.005), max_rate=np.full((1, 4), 50.))
+        error, tau = rng.normal(0, 200, (1, 4)), rng.uniform(.004, .09, (1, 4))
+        results = []
+        for methods in (upstream, native_thruster.TRANSCRIBED_METHODS):
+            bound = {key: types.MethodType(func, fake) for key, func in methods.items()}
+            fake.motor_model_rate = bound["motor_model_rate"]
+            mixing = bound["discrete_mixing_factor"](tau)
+            results.append((mixing, bound["continuous_mixing_factor"](tau), bound["rk4_integration"](error, mixing),
+                            bound["motor_model_rate"](error, mixing)))
+        for expected, actual in zip(*results):
+            np.testing.assert_allclose(actual, expected, rtol=0, atol=0, err_msg=name)
