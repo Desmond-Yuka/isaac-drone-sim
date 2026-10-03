@@ -31,7 +31,8 @@ class PathOverlayHook(RunHook):
 
     def refresh(self):
         loop = self._loop
-        self.overlay.update(self.trail.points, loop.trajectory.sample(loop.time_s).position_w)
+        # loop.reference holds the start pose during spin-up, before the trajectory begins.
+        self.overlay.update(self.trail.points, loop.reference(loop.time_s).position_w)
 
 
 class VideoHook(RunHook):

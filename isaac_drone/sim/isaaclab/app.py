@@ -182,7 +182,7 @@ def run_simulation(
             overlay.set_reference(reference_points)
         overlay_hook = PathOverlayHook(overlay, PathTrail())
         overlay_hook.trail.add(start)
-        overlay.update(overlay_hook.trail.points, loop.trajectory.sample(loop.time_s).position_w)
+        overlay.update(overlay_hook.trail.points, loop.reference(loop.time_s).position_w)
         hooks.append(overlay_hook)
     if recording["enabled"]:
         from isaac_drone.sim.isaaclab.camera import IsaacCameraRig
