@@ -1,5 +1,5 @@
 # 官方 Isaac Lab 仓库（自带 git 历史）——要改请在 GitHub 上 fork，不要复制进本仓库
-IsaacLab/
+/IsaacLab/
 
 # 服务器上的运行产物：日志、串流诊断文件、截图帧，可随时重新生成
 isaacsim-6.1/
