@@ -1,7 +1,9 @@
 """Closed-loop numerical regression against traces recorded before the modular refactor.
 
 tests/data/golden_synthetic.npz was produced at commit 7a458b4 by the original
-MotionControlLoop flying the synthetic CPU plant: the minimum-time helix config
+MotionControlLoop flying the synthetic CPU plant, and regenerated on
+isaac-drone/Version3 when the rotor gyroscopic torque (vehicle.rotor_inertia_kg_m2)
+became part of the plant: the minimum-time helix config
 for 20 s and the hold config (airborne start at 200 rps) for 5 s. Rows are
 subsampled every ``<name>_stride`` physics steps (row k = state after step
 stride*(k+1)). Refactors must reproduce them to round-off; a deliberate change

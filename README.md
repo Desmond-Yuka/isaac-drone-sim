@@ -64,8 +64,8 @@ python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
 | `isaac_drone/config/` | YAML 加载（`extends`、`--set`）与 schema 校验 |
 | `isaac_drone/trajectories/` | 分段轨迹框架、hold、helix、时间律、最短时间规划、可行性筛查、完成判据 |
 | `isaac_drone/control/` | 控制器接口与注册表、几何控制、级联 PID、有界推力分配 |
-| `isaac_drone/effects/`、`power/` | 风/气动/外力扰动；电池等效电路（默认关闭，需标定） |
-| `isaac_drone/runtime/` | 物理步控制循环 `MotionControlLoop`、与后端无关的运行器和钩子（叠加显示、录像、节拍、指标、画图） |
+| `isaac_drone/effects/` | 外力/力矩扰动：常值、OU 随机外扰（力世界系、力矩机体系）、风/气动阻力（默认关闭，需标定） |
+| `isaac_drone/runtime/` | 物理步控制循环 `MotionControlLoop`（含旋翼陀螺力矩与 `model_mismatch` 失配旋钮）、与后端无关的运行器和钩子（叠加显示、录像、节拍、指标、画图） |
 | `isaac_drone/sim/` | 后端接口；`synthetic.py` CPU 合成对象；`isaaclab/` 场景、PhysX 后端、相机、应用入口；原生电机积分的复用 |
 | `isaac_drone/telemetry/` | 每步基础数据、JSONL/CSV 记录器与字段 schema |
 | `isaac_drone/analysis/` | 指标、分阶段汇总、对比、扫参、画图 |
@@ -115,7 +115,7 @@ CPU 合成对象上 helix 段最大位置误差：几何控制约 0.03 m，级�
 
 终点判定看真实位置、速度、偏航和角速度，连续满足容差 2 s 才成功；成功后仍继续闭环悬停。超时、用户提前停止或结束时不满足条件，运行都不会标记成功，命令返回非零状态（2）。
 
-当前采用用户明确选择的**对角同向仿真旋向**，不宣称经过实机测量。实际旋翼位置、质量、质心和完整惯量都从 USD/PhysX 读取，不在控制器里写死。未知的气动和电池参数保留为 null，相关模型默认关闭。**尚未在完整 Isaac Sim 环境中完成增益调参验飞**；CPU 合成对象上的结果不能作为实机或 Isaac Sim 的精度保证。
+当前采用用户明确选择的**对角同向仿真旋向**，不宣称经过实机测量。实际旋翼位置、质量、质心和完整惯量都从 USD/PhysX 读取，不在控制器里写死。未知的气动参数保留为 null，相关模型默认关闭；电池模型已移除，待与 Kidambi 确认建模方式后再接入。**尚未在完整 Isaac Sim 环境中完成增益调参验飞**；CPU 合成对象上的结果不能作为实机或 Isaac Sim 的精度保证。
 
 ## 可选多机位视频录制（仅 isaaclab 后端）
 

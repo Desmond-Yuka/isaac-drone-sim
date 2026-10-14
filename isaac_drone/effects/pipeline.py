@@ -16,6 +16,7 @@ from isaac_drone.core.types import VehicleState, Wrench
 from isaac_drone.effects._math import body_to_world, dissipative_matrix, finite_scalar, positive_dt
 from isaac_drone.effects._math import numeric_array as finite_array
 from isaac_drone.effects.drag import BodyDrag
+from isaac_drone.effects.stochastic import OUWrench
 from isaac_drone.effects.wind import Gust, UniformGustWind, WindField
 
 
@@ -207,12 +208,45 @@ def _validate_optional_disturbance(item: Mapping) -> None:
         raise ValueError("specify at most one application point frame")
 
 
+_OU_KEYS = {
+    "enabled",
+    "force_mean_w_n",
+    "force_std_w_n",
+    "force_time_constant_s",
+    "torque_mean_b_nm",
+    "torque_std_b_nm",
+    "torque_time_constant_s",
+    "start_time_s",
+    "end_time_s",
+}
+
+
+def _validate_ou_wrench(config: Mapping) -> None:
+    _keys(config, _OU_KEYS, "ou_wrench")
+    for key in ("force_mean_w_n", "force_std_w_n", "torque_mean_b_nm", "torque_std_b_nm"):
+        _optional_array(config, key, (3,))
+        if "std" in key and config.get(key) is not None and np.any(np.asarray(config[key]) < 0):
+            raise ValueError(f"ou_wrench.{key} must be nonnegative")
+    for key in ("force_time_constant_s", "torque_time_constant_s"):
+        _optional_time(config, key, positive=True)
+    for key in ("start_time_s", "end_time_s"):
+        _optional_time(config, key)
+    if (
+        config.get("start_time_s") is not None
+        and config.get("end_time_s") is not None
+        and config["end_time_s"] <= config["start_time_s"]
+    ):
+        raise ValueError("ou_wrench.end_time_s must exceed start_time_s")
+
+
 def build_effects(config: Mapping) -> EffectsPipeline:
     """Build from the YAML effects section; missing enabled parameters fail closed."""
     config = _section(config, "effects")
-    _keys(config, {"wind", "aerodynamic", "disturbances"}, "effects")
+    _keys(config, {"wind", "aerodynamic", "disturbances", "ou_wrench"}, "effects")
     wind_config = _section(_required(config, "wind", "effects"), "wind")
     aero_config = _section(_required(config, "aerodynamic", "effects"), "aerodynamic")
+    ou_config = _section(_required(config, "ou_wrench", "effects"), "ou_wrench")
+    _validate_ou_wrench(ou_config)
     _keys(
         wind_config,
         {
@@ -319,4 +353,8 @@ def build_effects(config: Mapping) -> EffectsPipeline:
                 application_point_w_m=item.get("application_point_w_m"),
             )
         )
+    if _enabled(ou_config, "ou_wrench"):
+        keys = sorted(_OU_KEYS - {"enabled", "end_time_s"})
+        parameters = {key: _required(ou_config, key, "ou_wrench") for key in keys}
+        effects.append(OUWrench(**parameters, end_time_s=ou_config.get("end_time_s")))
     return EffectsPipeline(effects, wind)

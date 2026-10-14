@@ -15,10 +15,10 @@ import numpy as np
 from isaac_drone.config import assert_flight_ready
 from isaac_drone.control import BoundedAllocator, FlightLimits, VehicleModel, build_controller
 from isaac_drone.control.allocation import AllocationResult
-from isaac_drone.core.types import Wrench
+from isaac_drone.core.types import MassProperties, Wrench
 from isaac_drone.core.validation import finite_array
 from isaac_drone.effects import build_effects
-from isaac_drone.power import build_power
+from isaac_drone.sim.actuation import thrust_to_motor_speeds
 from isaac_drone.telemetry.measurements import build_basic_record
 from isaac_drone.trajectories import SegmentedTrajectory, build_trajectory
 from isaac_drone.trajectories.completion import CompletionMonitor
@@ -33,16 +33,17 @@ class MotionControlLoop:
     """Trajectory -> controller -> allocation -> motor commands -> backend, once per physics step.
 
     Components come from the config (``trajectory``, ``controller``, ``limits``,
-    ``completion``, ``effects``, ``power``) unless injected. The controller is
-    built at reset from the backend's actual mass properties and geometry; an
-    injected ``controller`` instance is reset instead. During the launch spin-up
+    ``completion``, ``effects``) unless injected. The controller, allocator and
+    planner are built at reset from the backend's actual mass properties and
+    geometry divided by the ``model_mismatch`` plant/model ratios (Kidambi,
+    IEEE Access 2025, Sec. II-C); an injected ``controller`` instance is reset
+    instead. The rotor gyroscopic torque (arXiv 2609.12188 eq. 7) is added to
+    the external wrench when ``vehicle.rotor_inertia_kg_m2`` is set. During the launch spin-up
     (``vehicle.launch.spin_up_s``) the reference holds the start pose and motor
     commands are scaled by a smooth 0..1 envelope; the trajectory starts after it.
     """
 
-    def __init__(
-        self, config, backend, *, trajectory=None, controller=None, effects=None, power=None, state_provider=None
-    ):
+    def __init__(self, config, backend, *, trajectory=None, controller=None, effects=None, state_provider=None):
         self.config = deepcopy(config)
         self.backend = backend
         self.state_provider = state_provider or backend
@@ -51,9 +52,9 @@ class MotionControlLoop:
         self._injected_controller = controller
         self.controller = None
         self.effects = effects if effects is not None else build_effects(config["effects"])
-        self.power = power if power is not None else build_power(config["power"])
-        if bool(config["power"]["enabled"]) != (self.power is not None):
-            raise ValueError("power.enabled must agree with the supplied calibrated power system")
+        self.mismatch = config["model_mismatch"]
+        self.rotor_inertia = config["vehicle"]["rotor_inertia_kg_m2"]
+        self.rotor_directions = np.asarray(config["vehicle"]["rotor_directions"], dtype=float)
         self.dt_s = config["simulation"]["dt"]
         self.decimation = config["simulation"]["control_decimation"]
         self.spin_up_s = float(config["vehicle"]["launch"]["spin_up_s"])
@@ -63,7 +64,32 @@ class MotionControlLoop:
         self._pending = False
         self._initialized = False
 
-    def reset(self, *, initial_current_a=None, temperature_c=None):
+    def _nominal_mass(self) -> MassProperties:
+        truth = self.backend.mass_properties()
+        scale = np.diag(1.0 / np.sqrt(np.asarray(self.mismatch["inertia_ratio"], dtype=float)))
+        inertia = scale @ truth.inertia_com_b @ scale
+        return MassProperties(truth.mass_kg / self.mismatch["mass_ratio"], inertia, truth.com_b)
+
+    def _nominal_motor(self) -> dict:
+        """Motor parameters as the model believes them; rps limits stay hardware limits."""
+        parameters = self.backend.motor_parameters()
+        ratio = self.mismatch["thrust_coefficient_ratio"]
+        return {
+            "sampled_kf": finite_array(parameters["sampled_kf"], (4,), "sampled kf") / ratio,
+            "thrust_min_n": finite_array(parameters["thrust_min_n"], (4,), "motor minimum thrust") / ratio,
+            "thrust_max_n": finite_array(parameters["thrust_max_n"], (4,), "motor maximum thrust") / ratio,
+            "rps_min": parameters["rps_min"],
+            "rps_max": parameters["rps_max"],
+            "current_rps": finite_array(parameters["current_rps"], (4,), "current motor rps"),
+        }
+
+    def _gyroscopic_torque(self, truth, current_rps) -> Wrench:
+        if self.rotor_inertia is None:
+            return Wrench.zero()
+        spin = 2 * np.pi * float(self.rotor_directions @ current_rps)
+        return Wrench(np.zeros(3), np.cross(truth.angular_velocity_b, [0.0, 0.0, self.rotor_inertia * spin]))
+
+    def reset(self):
         self._initialized, self._pending = False, False
         launch = self.config["vehicle"]["launch"]
         if launch["from_ground"]:
@@ -77,14 +103,16 @@ class MotionControlLoop:
         assert_flight_ready(self.config, matrix)
         if hasattr(self.backend, "assert_control_compatible"):
             self.backend.assert_control_compatible()
-        parameters = self.backend.motor_parameters()
+        parameters = self._nominal_motor()
         gravity = np.array(self.config["simulation"]["gravity"], dtype=float)
+        nominal_matrix = matrix.copy()
+        nominal_matrix[5] /= self.mismatch["reaction_torque_ratio"]
         self.vehicle = VehicleModel(
-            self.backend.mass_properties(),
+            self._nominal_mass(),
             gravity,
-            matrix,
-            finite_array(parameters["thrust_min_n"], (4,), "motor minimum thrust"),
-            finite_array(parameters["thrust_max_n"], (4,), "motor maximum thrust"),
+            nominal_matrix,
+            parameters["thrust_min_n"],
+            parameters["thrust_max_n"],
             self.dt_s * self.decimation,
         )
         if self._injected_controller is not None:
@@ -94,7 +122,7 @@ class MotionControlLoop:
             self.controller = build_controller(self.config["controller"], vehicle=self.vehicle, limits=self.limits)
             self.controller_kind = self.config["controller"]["kind"]
         self.allocator = BoundedAllocator(
-            matrix, np.array(self.config["allocation"]["weights"]), self.config["allocation"]["regularization"]
+            nominal_matrix, np.array(self.config["allocation"]["weights"]), self.config["allocation"]["regularization"]
         )
         self.controller.reset()
         self.step_index = 0
@@ -114,11 +142,6 @@ class MotionControlLoop:
         self._plan_and_check()
         if self.mission is not None:
             self.mission.reset()
-        if self.power is not None:
-            self.power.reset()
-            if initial_current_a is None:
-                raise ValueError("Power coupling needs an explicit initial current measurement/model operating point")
-            self.power.initialize(initial_current_a, temperature_c=temperature_c)
         self._pending, self._initialized = False, True
 
     @property
@@ -234,18 +257,8 @@ class MotionControlLoop:
         self._interval_reference = deepcopy(self.setpoint)
         # Held with the setpoint: the controller only changes them in compute().
         self._interval_diagnostics = self.controller.diagnostics()
-        motor_parameters = self.backend.motor_parameters()
-        lower = finite_array(motor_parameters["thrust_min_n"], (4,), "motor minimum thrust")
-        upper = finite_array(motor_parameters["thrust_max_n"], (4,), "motor maximum thrust")
-        if self.power is not None:
-            bounds = self.power.thrust_bounds_n(truth, self.backend.telemetry())
-            lower = np.maximum(lower, finite_array(bounds.lower_n, (4,), "power lower thrust bounds"))
-            upper = np.minimum(upper, finite_array(bounds.upper_n, (4,), "power upper thrust bounds"))
-            if np.any(lower > upper):
-                raise RuntimeError(
-                    "Battery command envelope is incompatible with native motor thrust limits; "
-                    "an explicit shutdown actuator model is required"
-                )
+        motor_parameters = self._nominal_motor()
+        lower, upper = motor_parameters["thrust_min_n"], motor_parameters["thrust_max_n"]
         if self.controller.output == "wrench":
             allocation = self.allocator.allocate(self._requested_wrench, lower, upper, self._previous_thrust)
         else:
@@ -257,7 +270,7 @@ class MotionControlLoop:
                 self._requested_wrench.vector - achieved.vector,
                 bool(np.any(thrusts <= lower) or np.any(thrusts >= upper)),
             )
-        target_rps = self.backend.thrust_to_motor_speeds(allocation.thrusts_n)
+        target_rps = thrust_to_motor_speeds(allocation.thrusts_n, motor_parameters["sampled_kf"], lower, upper)
         phase = self.phase(self.time_s)
         startup_fraction = 1.0
         if phase == SPIN_UP_PHASE:
@@ -268,7 +281,7 @@ class MotionControlLoop:
         target_rps = np.where(
             target_rps == 0, 0.0, np.clip(target_rps, motor_parameters["rps_min"], motor_parameters["rps_max"])
         )
-        effective_thrust = finite_array(motor_parameters["sampled_kf"], (4,), "sampled kf") * target_rps**2
+        effective_thrust = motor_parameters["sampled_kf"] * target_rps**2
         effective_wrench = Wrench.from_vector(self.allocator.matrix @ effective_thrust)
         self.controller.notify_allocation(
             AllocationResult(
@@ -279,7 +292,8 @@ class MotionControlLoop:
             )
         )
         external = self.effects.evaluate(truth, self.dt_s)
-        self.backend.apply_motor_speeds(target_rps, external)
+        gyroscopic = self._gyroscopic_torque(truth, motor_parameters["current_rps"])
+        self.backend.apply_motor_speeds(target_rps, external + gyroscopic)
         self._previous_thrust = effective_thrust.copy()
         self._pending = True
         self._record = {
@@ -299,28 +313,23 @@ class MotionControlLoop:
             "allocation_residual": allocation.residual,
             "allocation_saturated": allocation.saturated,
             "external_wrench_b": external.vector,
+            "gyroscopic_torque_b_nm": gyroscopic.torque_b,
         }
         return deepcopy(self._record)
 
-    def finish_step(self, *, measured_current_a=None, temperature_c=None):
+    def finish_step(self):
         if not self._initialized or not self._pending:
             raise RuntimeError("finish_step requires a prepared step; reset after any plugin failure")
         try:
-            return self._finish_step(measured_current_a=measured_current_a, temperature_c=temperature_c)
+            return self._finish_step()
         except BaseException:
             # Physics has already advanced. Retrying this interval would double
             # count time/energy, so an explicit full reset is required.
             self._initialized, self._pending = False, False
             raise
 
-    def _finish_step(self, *, measured_current_a=None, temperature_c=None):
-        """Call only after physics and backend state buffers advance by dt.
-
-        Electrical updates use endpoint load samples held over this interval.
-        Supply measured current and temperature, or an explicitly calibrated
-        load plugin. The motor integrates RPS with native lag/rate limits;
-        the power envelope constrains commands, not an unmodelled ESC circuit.
-        """
+    def _finish_step(self):
+        """Call only after physics and backend state buffers advance by dt."""
         if not self._pending:
             raise RuntimeError("finish_step requires one preceding prepare_step")
         self.step_index += 1
@@ -349,12 +358,5 @@ class MotionControlLoop:
             desired_angular_velocity_d=self._interval_diagnostics.desired_angular_velocity_d,
             motor_command_rps=self._record["motor_command_rps"],
         )
-        if self.power is not None:
-            power_state = self.power.update(
-                truth, telemetry, self.dt_s, measured_current_a=measured_current_a, temperature_c=temperature_c
-            )
-            self._record["battery"] = asdict(power_state)
-        else:
-            self._record["battery"] = None
         self._pending = False
         return deepcopy(self._record)

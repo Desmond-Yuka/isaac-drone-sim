@@ -16,7 +16,7 @@ from isaac_drone.telemetry.recorder import asset_hashes, dump_json
 
 LIMITATIONS = [
     "Simulation rotor directions are an explicit engineering choice, not measured ARL data",
-    "Disabled effects/power are not modelled; they are not evidence of zero drag or unlimited energy",
+    "Disabled effects are not modelled; no battery or ESC electrical model is included",
     "Coefficient-based propulsion does not simulate full airflow or ESC electrical dynamics",
 ]
 

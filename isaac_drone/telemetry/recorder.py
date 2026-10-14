@@ -523,7 +523,8 @@ def _wrench_fields():
             "Configured external effects only; no duplicate simulator gravity, contacts or native damping.",
         ),
         "submitted": (
-            "Backend motor contribution plus configured external effects submitted for this interval",
+            "Backend motor contribution plus configured external effects and rotor gyroscopic torque submitted "
+            "for this interval",
             "Submitted actuation excludes simulator gravity, collisions and native damping; unavailable if "
             "motor data is unavailable.",
         ),

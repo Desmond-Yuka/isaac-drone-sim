@@ -26,8 +26,6 @@ def test_default_config_has_explicit_source_and_local_usd():
     assert cfg["vehicle"]["rotor_direction_source"] == "simulation_diagonal_pairs"
     assert cfg["vehicle"]["rotor_directions"] == [-1, 1, 1, -1]
     assert resolve_asset(cfg).is_file()
-    assert not cfg["power"]["enabled"]
-    assert cfg["power"]["capacity_ah"] is None
 
 
 @pytest.mark.parametrize(
@@ -116,6 +114,7 @@ class FakeBackend:
             "thrust_max_n": np.full(4, 10.0),
             "rps_min": np.full(4, 100.0),
             "rps_max": np.full(4, 1000.0),
+            "current_rps": np.full(4, 200.0),
         }
 
     def thrust_to_motor_speeds(self, thrust):
@@ -252,3 +251,56 @@ def test_ground_launch_reference_anchors_to_truth_even_with_biased_estimator():
     record = loop.prepare_step()
     np.testing.assert_allclose(record["setpoint"]["position_w"], backend.start)
     np.testing.assert_allclose(record["state"]["position_w"], backend.start + [1, 2, 3])
+
+
+class SpinningBackend(FakeBackend):
+    def read_state(self, time_s):
+        return replace(super().read_state(time_s), angular_velocity_b=np.array([0.3, -0.2, 0.1]))
+
+
+def test_rotor_gyroscopic_torque_follows_signed_rotor_speeds():
+    cfg = load_config()
+    cfg["vehicle"]["rotor_inertia_kg_m2"] = 2e-5
+    backend = SpinningBackend()
+    loop = MotionControlLoop(cfg, backend)
+    loop.reset()
+    record = loop.prepare_step()
+    rps = backend.motor_parameters()["current_rps"]
+    spin = 2 * np.pi * float(np.array(cfg["vehicle"]["rotor_directions"]) @ rps)
+    expected = np.cross([0.3, -0.2, 0.1], [0.0, 0.0, 2e-5 * spin])
+    np.testing.assert_allclose(record["gyroscopic_torque_b_nm"], expected)
+    np.testing.assert_allclose(backend.applied[-1][1].torque_b, expected)
+    np.testing.assert_array_equal(record["external_wrench_b"], np.zeros(6))
+    cfg["vehicle"]["rotor_inertia_kg_m2"] = None
+    loop = MotionControlLoop(cfg, backend)
+    loop.reset()
+    np.testing.assert_array_equal(loop.prepare_step()["gyroscopic_torque_b_nm"], np.zeros(3))
+
+
+def test_model_mismatch_scales_the_nominal_model_but_not_the_plant():
+    cfg = load_config()
+    cfg["model_mismatch"] = {
+        "mass_ratio": 1.25,
+        "inertia_ratio": [1.0, 1.1, 0.9],
+        "thrust_coefficient_ratio": 2.0,
+        "reaction_torque_ratio": 0.5,
+    }
+    backend = FakeBackend()
+    loop = MotionControlLoop(cfg, backend)
+    loop.reset()
+    truth = backend.mass_properties()
+    nominal = loop.vehicle.mass_properties
+    assert nominal.mass_kg == pytest.approx(truth.mass_kg / 1.25)
+    np.testing.assert_allclose(np.diag(nominal.inertia_com_b), np.diag(truth.inertia_com_b) / [1.0, 1.1, 0.9])
+    np.testing.assert_allclose(loop.vehicle.thrust_max_n, 5.0)
+    np.testing.assert_allclose(loop.allocator.matrix[5], backend.allocation_matrix_b[5] / 0.5)
+    np.testing.assert_allclose(loop.allocator.matrix[:5], backend.allocation_matrix_b[:5])
+    record = loop.prepare_step()
+    applied_thrust = backend.applied[-1][0]
+    np.testing.assert_allclose(applied_thrust, 2.0 * record["motor_command_thrust_n"])
+    assert np.all(record["allocated_thrust_n"] <= 5.0)
+    for bad in ({"mass_ratio": 0}, {"inertia_ratio": [1, -1, 1]}, {"thrust_coefficient_ratio": True}, {"extra": 1}):
+        broken = load_config()
+        broken["model_mismatch"].update(bad)
+        with pytest.raises(ConfigurationError):
+            validate_config(broken)

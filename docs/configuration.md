@@ -39,13 +39,14 @@ python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
 |---|---|
 | `simulation` | 物理步长 `dt`、控制降频、渲染间隔、设备、重力、随机种子、时长、原生 SimulationCfg 覆盖 |
 | `recording` | 可选多机位视频（仅 isaaclab 后端），见 README |
-| `vehicle` | 资产、旋翼方向及其来源、推进器动力学、初态、`launch`（地面起飞、离地间隙、`spin_up_s` 起转时长）、原生/USD 覆盖 |
+| `vehicle` | 资产、旋翼方向及其来源、转子惯量 `rotor_inertia_kg_m2`（陀螺力矩，null 关闭）、推进器动力学、初态、`launch`（地面起飞、离地间隙、`spin_up_s` 起转时长）、原生/USD 覆盖 |
 | `limits` | 控制器和轨迹规划**共用**的飞行包线：`max_tilt_rad`、`max_yaw_rate_rad_s`、`max_acceleration_m_s2` |
 | `controller` | `kind` + 该控制器的参数（见第 4 节） |
 | `allocation` | 有界加权分配的权重和正则化 |
 | `trajectory` | `kind` + 该轨迹的参数（见第 5 节） |
 | `completion` | 终点悬停完成判据；`null` 表示不设判据（跑完所有步即成功） |
-| `effects` / `power` | 风、气动阻力、外力扰动；电池模型。默认关闭，开启必须给出标定参数 |
+| `effects` | 常值外力/力矩、`ou_wrench` 随机外扰（力世界系、力矩机体系，均值 + 逐轴标准差 + 相关时间）、风、气动阻力；默认全部关闭 |
+| `model_mismatch` | 对象实际值 / 控制器标称值之比：`mass_ratio`、`inertia_ratio`、`thrust_coefficient_ratio`、`reaction_torque_ratio`；全为 1 时无失配 |
 | `scene` / `logging` | 地面与灯光；日志目录、记录间隔、刷新间隔 |
 
 `vehicle.launch.spin_up_s`：起转阶段参考保持起点，电机指令乘以 0→1 的平滑包络；轨迹在起转结束时刻才开始。地面起飞必须 > 0。地面起飞时轨迹锚定在后端真值（物理放置位置）；空中起始锚定在控制器看到的状态（可以是估计器输出）。
@@ -111,6 +112,14 @@ def build(params, *, vehicle, limits):
 **轨迹**：继承 `SegmentedTrajectory`，实现 `_build(position_w, yaw_rad)`，返回 `(段列表, 终点位置, 终点偏航)`。每个 `Segment` 给出 `setpoint(progress)`（进度及其 1–4 阶导数 → 位置到 snap 与偏航）、路径长度、偏航变化量、时长（`None` 为最短时间）。这样就自动获得最短时间规划、可行性筛查、阶段划分、完成判据、轨迹叠加显示和按阶段统计的指标。参考 `trajectories/helix.py`。
 
 ## 7. 批量实验
+
+鲁棒性实验按 Kidambi（IEEE Access 2025）的方式扫参数失配与扰动强度，例如：
+
+```bash
+python -m isaac_drone sweep --config configs/helix_moderate.yaml --grid model_mismatch.mass_ratio=[0.75,0.9,1.0,1.15,1.3]
+python -m isaac_drone sweep --config configs/helix_moderate.yaml --set effects.ou_wrench.enabled=true \
+    --grid effects.ou_wrench.force_std_w_n=[[0.5,0,0],[1,0,0],[2,0,0]] --grid simulation.seed=[0,1,2,3,4]
+```
 
 ```bash
 # 网格扫参（CPU 合成后端，多进程并行）：每个点都是完整运行目录

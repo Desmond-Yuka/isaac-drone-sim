@@ -195,6 +195,7 @@ class ScriptedBackend:
             "thrust_max_n": np.full(4, 10.0),
             "rps_min": np.full(4, 100.0),
             "rps_max": np.full(4, 1000.0),
+            "current_rps": np.full(4, 200.0),
         }
 
     def thrust_to_motor_speeds(self, thrust):

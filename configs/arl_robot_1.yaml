@@ -33,6 +33,7 @@ vehicle:
   # 用户明确选择：对角同向仿真设定，并非实机测量。符号是反扭矩系数方向。
   rotor_directions: [-1, 1, 1, -1]
   rotor_direction_source: simulation_diagonal_pairs
+  rotor_inertia_kg_m2: 3.5e-5       # 桨+电机转子极转动惯量 J_r，陀螺力矩 ω×(J_r e3 Σσ_iΩ_i)；null 关闭。按 8 英寸桨估算的量级值，未实测
   thrusters:
     thruster_names_expr: [back_left_prop, back_right_prop, front_left_prop, front_right_prop]
     thrust_range: [0.1, 10.0]       # 每桨 [N]，保留原模型的非零下限
@@ -115,26 +116,22 @@ effects:
     angular_linear_drag_b_nm_s: null
     center_of_pressure_b_m: null # 相对质心；启用时须实测/辨识后明确给出
   disturbances: []              # 支持世界/机体系、有时间窗和作用点的外力/力矩
+  ou_wrench:                    # 随机外扰 d1/d2：力在世界系作用于质心，力矩在机体系；均值 + OU 噪声（平稳初始化、精确离散）
+    enabled: false
+    force_mean_w_n: [0.0, 0.0, 0.0]
+    force_std_w_n: [0.0, 0.0, 0.0]
+    force_time_constant_s: 1.0
+    torque_mean_b_nm: [0.0, 0.0, 0.0]
+    torque_std_b_nm: [0.0, 0.0, 0.0]
+    torque_time_constant_s: 1.0
+    start_time_s: 0.0
+    end_time_s: null            # null = 持续到结束
 
-power:
-  enabled: false                # 电气模型未接入；不表示无限电池
-  model: equivalent_circuit
-  current_source: null          # load_model 或 external_measurement；必须接入明确来源
-  calibration_id: null
-  capacity_ah: null
-  initial_soc: null
-  ocv_soc_voltage_table: null    # [[SOC, 端电池开路电压V], ...]，覆盖 0..1
-  series_resistance_ohm: null
-  rc_branches: null             # [] 表示明确选择无极化支路；null 表示未知
-  charge_coulombic_efficiency: null
-  discharge_coulombic_efficiency: null
-  cutoff_voltage_v: null
-  maximum_voltage_v: null
-  max_discharge_current_a: null
-  max_charge_current_a: null
-  calibration_temperature_c: null
-  valid_temperature_range_c: null
-  initial_temperature_c: null
+model_mismatch:                 # 对象实际值 / 控制器与规划器所用标称值；全为 1 时无失配
+  mass_ratio: 1.0               # Δm：1.2 = 对象比控制器以为的重 20%
+  inertia_ratio: [1.0, 1.0, 1.0]  # ΔI 逐轴
+  thrust_coefficient_ratio: 1.0 # ΔK_T：实际每桨推力 = ratio × 控制器以为的推力
+  reaction_torque_ratio: 1.0    # ΔK_D：实际反扭矩系数 / 标称
 
 scene:
   ground:

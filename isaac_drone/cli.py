@@ -187,7 +187,6 @@ def _validate_report(config, asset_path) -> dict:
         "asset_layer_sha256": asset_hashes(asset_path),
         "runtime_geometry_check": "requires `inspect` in Isaac Lab",
         "trajectory": config["trajectory"]["kind"],
-        "power_enabled": config["power"]["enabled"],
         "recording": config["recording"],
     }
 
@@ -279,11 +278,6 @@ def main(argv=None) -> int:
             return run_simulation(config, figures=not args.no_figures).exit_code
 
     # Isaac Lab: inspect, or run --backend isaaclab.
-    if config["power"]["enabled"] and command == "run":
-        raise ValueError(
-            "The CLI has no calibrated current/envelope plugins. "
-            "Inject a PowerSystem into MotionControlLoop from a custom entry point"
-        )
     try:
         from isaaclab.app import AppLauncher
     except ImportError as error:

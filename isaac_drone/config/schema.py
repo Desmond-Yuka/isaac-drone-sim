@@ -1,7 +1,7 @@
 """Experiment configuration schema (``schema_version: 2``) without importing the simulator.
 
 Sections: simulation, recording (optional), vehicle, limits, controller,
-allocation, trajectory, completion, effects, power, scene, logging. Plugin
+allocation, trajectory, completion, effects, model_mismatch, scene, logging. Plugin
 sections (``controller``, ``trajectory``) are validated by the parameter
 dataclass registered for their ``kind``. Native Isaac Lab fields are validated
 against the installed classes by the backend builder.
@@ -46,7 +46,7 @@ _SECTIONS = {
     "trajectory",
     "completion",
     "effects",
-    "power",
+    "model_mismatch",
     "scene",
     "logging",
 }
@@ -125,11 +125,10 @@ def validate_config(config: dict) -> None:
     if config["completion"] is not None:
         parse_params(CompletionParams, config["completion"], "completion")
     _validate_logging(config["logging"])
+    _validate_mismatch(config["model_mismatch"])
     from isaac_drone.effects import build_effects
-    from isaac_drone.power import validate_power_config
 
     build_effects(config["effects"])
-    validate_power_config(config["power"])
 
 
 def _validate_simulation(sim):
@@ -190,6 +189,7 @@ def _validate_vehicle(vehicle, scene):
         "allocation_matrix",
         "rotor_directions",
         "rotor_direction_source",
+        "rotor_inertia_kg_m2",
         "thrusters",
         "initial_state",
         "launch",
@@ -211,6 +211,8 @@ def _validate_vehicle(vehicle, scene):
         raise ConfigurationError("rotor_directions must be four -1/+1 signs")
     if vehicle["rotor_direction_source"] not in ("simulation_diagonal_pairs", "measured", "unverified_upstream"):
         raise ConfigurationError("rotor_direction_source must document the rotation-direction provenance")
+    if vehicle["rotor_inertia_kg_m2"] is not None:
+        _number(vehicle["rotor_inertia_kg_m2"], "vehicle.rotor_inertia_kg_m2", nonnegative=True)
     if not isinstance(vehicle["native_overrides"], dict):
         raise ConfigurationError("vehicle.native_overrides must be a mapping")
     reserved = {"init_state", "actuators", "allocation_matrix", "rotor_directions", "prim_path", "class_type"}
@@ -284,6 +286,15 @@ def _validate_allocation(alloc):
     if np.any(_array(alloc["weights"], (6,), "allocation.weights") <= 0):
         raise ConfigurationError("allocation.weights must be positive")
     _number(alloc["regularization"], "allocation.regularization", nonnegative=True)
+
+
+def _validate_mismatch(mismatch):
+    fields = {"mass_ratio", "inertia_ratio", "thrust_coefficient_ratio", "reaction_torque_ratio"}
+    _keys(mismatch, fields, fields, "model_mismatch")
+    for field in ("mass_ratio", "thrust_coefficient_ratio", "reaction_torque_ratio"):
+        _number(mismatch[field], f"model_mismatch.{field}", positive=True)
+    if np.any(_array(mismatch["inertia_ratio"], (3,), "model_mismatch.inertia_ratio") <= 0):
+        raise ConfigurationError("model_mismatch.inertia_ratio must be positive")
 
 
 def _validate_scene(scene):
