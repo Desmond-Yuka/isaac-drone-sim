@@ -115,7 +115,7 @@ CPU 合成对象上、关闭默认 OU 外扰与质量失配（`--set effects.ou_
 
 终点判定看真实位置、速度、偏航和角速度，连续满足容差 2 s 才成功；成功后仍继续闭环悬停。超时、用户提前停止或结束时不满足条件，运行都不会标记成功，命令返回非零状态（2）。
 
-默认开启 20% 质量失配（`model_mismatch.mass_ratio: 1.2`）和 OU 随机外扰（`helix.yaml` 从起转结束 2 s 起作用）：最短时间规划按控制器以为的较轻质量进行，比真实能力更激进，螺旋段会出现推力饱和；位置环默认无积分，终点悬停约有 0.3 m 稳态下沉，超过 0.10 m 的完成判据，所以默认配置下任务判为失败（返回 2）。无扰动、无失配的对照加 `--set effects.ou_wrench.enabled=false --set model_mismatch.mass_ratio=1.0`。旋翼陀螺力矩默认关闭（`vehicle.rotor_inertia_kg_m2: null`），原因见 [docs/architecture.md 第 6 节](docs/architecture.md#6-扰动和气动扩展)。
+默认开启 20% 质量失配（`model_mismatch.mass_ratio: 1.2`）和 OU 随机外扰（`helix.yaml` 从起转结束 2 s 起作用）：最短时间规划按控制器以为的较轻质量进行，比真实能力更激进，螺旋段会出现推力饱和；位置环默认无积分，终点悬停约有 0.3 m 稳态下沉，超过 0.25 m 的完成判据，所以默认配置下任务判为失败（返回 2）。`helix.yaml` 的完成判据按默认 OU 下的悬停抖动放宽（位置 0.25 m、速度 0.25 m/s、角速度 0.8 rad/s、偏航 0.1 rad），只开 OU、不加失配时可以判成功。无扰动、无失配的对照加 `--set effects.ou_wrench.enabled=false --set model_mismatch.mass_ratio=1.0`。旋翼陀螺力矩默认关闭（`vehicle.rotor_inertia_kg_m2: null`），原因见 [docs/architecture.md 第 6 节](docs/architecture.md#6-扰动和气动扩展)。
 
 当前采用用户明确选择的**对角同向仿真旋向**，不宣称经过实机测量。实际旋翼位置、质量、质心和完整惯量都从 USD/PhysX 读取，不在控制器里写死。未知的气动参数保留为 null，相关模型默认关闭；电池模型已移除，待与 Kidambi 确认建模方式后再接入。**尚未在完整 Isaac Sim 环境中完成增益调参验飞**；CPU 合成对象上的结果不能作为实机或 Isaac Sim 的精度保证。
 

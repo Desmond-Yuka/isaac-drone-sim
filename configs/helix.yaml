@@ -45,10 +45,10 @@ trajectory:
   rest_speed_tolerance_m_s: 0.001            # reset 时要求静止
   rest_angular_speed_tolerance_rad_s: 0.001
 
-completion:
-  position_tolerance_m: 0.10
-  speed_tolerance_m_s: 0.10
+completion:                     # 按默认 OU 外扰下的悬停抖动放宽（20 个种子：位置 ≤0.20 m、速度 ≤0.18 m/s、角速度 ≤0.63 rad/s）
+  position_tolerance_m: 0.25      # 不容忍 20% 质量失配的稳态下沉（0.3–0.46 m）
+  speed_tolerance_m_s: 0.25
   yaw_tolerance_rad: 0.10
-  angular_speed_tolerance_rad_s: 0.10
+  angular_speed_tolerance_rad_s: 0.8
   dwell_time_s: 2.0             # 连续实际满足条件才判定悬停成功
   max_hold_time_s: 10.0

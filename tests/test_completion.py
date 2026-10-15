@@ -16,8 +16,12 @@ def sample(time, **kwargs):
     return replace(VehicleState(time, np.zeros(3), np.array([1.0, 0, 0, 0]), np.zeros(3), np.zeros(3)), **kwargs)
 
 
+LIMITS = load_config(HELIX_CONFIG)["completion"]
+YAW = LIMITS["yaw_tolerance_rad"] + 0.01
+
+
 def monitor():
-    return CompletionMonitor(load_config(HELIX_CONFIG)["completion"])
+    return CompletionMonitor(LIMITS)
 
 
 def test_reference_finishing_alone_is_not_success_and_reset_discards_dwell():
@@ -33,10 +37,10 @@ def test_reference_finishing_alone_is_not_success_and_reset_discards_dwell():
 @pytest.mark.parametrize(
     "change",
     [
-        {"position_w": np.array([0.11, 0, 0])},
-        {"linear_velocity_w": np.array([0, 0.11, 0])},
-        {"angular_velocity_b": np.array([0, 0, 0.11])},
-        {"quaternion_wxyz": np.array([np.cos(0.11), 0, 0, np.sin(0.11)])},
+        {"position_w": np.array([LIMITS["position_tolerance_m"] + 0.01, 0, 0])},
+        {"linear_velocity_w": np.array([0, LIMITS["speed_tolerance_m_s"] + 0.01, 0])},
+        {"angular_velocity_b": np.array([0, 0, LIMITS["angular_speed_tolerance_rad_s"] + 0.01])},
+        {"quaternion_wxyz": np.array([np.cos(YAW / 2), 0, 0, np.sin(YAW / 2)])},
     ],
 )
 def test_each_physical_error_breaks_continuous_dwell_and_revokes_success(change):
