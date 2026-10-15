@@ -45,8 +45,8 @@ python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
 | `allocation` | 有界加权分配的权重和正则化 |
 | `trajectory` | `kind` + 该轨迹的参数（见第 5 节） |
 | `completion` | 终点悬停完成判据；`null` 表示不设判据（跑完所有步即成功） |
-| `effects` | 常值外力/力矩、`ou_wrench` 随机外扰（力世界系、力矩机体系，均值 + 逐轴标准差 + 相关时间）、风、气动阻力；默认全部关闭 |
-| `model_mismatch` | 对象实际值 / 控制器标称值之比：`mass_ratio`、`inertia_ratio`、`thrust_coefficient_ratio`、`reaction_torque_ratio`；全为 1 时无失配 |
+| `effects` | 常值外力/力矩、`ou_wrench` 随机外扰（力世界系、力矩机体系，均值 + 逐轴标准差 + 相关时间）、风、气动阻力；`ou_wrench` 默认开启（力均值 [1,0,0] N、各轴标准差 0.5 N、τ=1 s；`helix.yaml` 从起转结束 2 s 起作用），其余默认关闭 |
+| `model_mismatch` | 对象实际值 / 控制器标称值之比：`mass_ratio`、`inertia_ratio`、`thrust_coefficient_ratio`、`reaction_torque_ratio`；全为 1 时无失配，默认 `mass_ratio: 1.2` |
 | `scene` / `logging` | 地面与灯光；日志目录、记录间隔、刷新间隔 |
 
 `vehicle.launch.spin_up_s`：起转阶段参考保持起点，电机指令乘以 0→1 的平滑包络；轨迹在起转结束时刻才开始。地面起飞必须 > 0。地面起飞时轨迹锚定在后端真值（物理放置位置）；空中起始锚定在控制器看到的状态（可以是估计器输出）。

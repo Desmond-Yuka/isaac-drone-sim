@@ -17,6 +17,10 @@ vehicle:
     from_ground: true
     spin_up_s: 2.0              # 电机从零速平滑起转
 
+effects:
+  ou_wrench:
+    start_time_s: 2.0           # 地面起转（spin_up_s）结束后才施加外扰，避免飞机在地面被推滑、压倾
+
 limits:
   max_tilt_rad: 1.3962634015954636      # 80°：最快 helix 名义倾角约 68°，其余留给反馈
   max_yaw_rate_rad_s: 6.283185307179586  # tangent 机头巡航偏航速率约 5 rad/s

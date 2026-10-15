@@ -126,7 +126,8 @@ def test_rotor_thrust_controllers_bypass_allocation_and_are_clipped_to_bounds():
 
 @pytest.mark.slow
 def test_preset_flies_the_moderate_helix_on_the_synthetic_plant():
-    config = load_config(PID_CONFIG)
+    # Nominal conditions: the default OU wrench and 20% mass mismatch switched off.
+    config = load_config(PID_CONFIG, overrides=["effects.ou_wrench.enabled=false", "model_mismatch.mass_ratio=1.0"])
     backend = SyntheticBackend(config)
     loop = MotionControlLoop(config, backend)
     loop.reset()

@@ -117,9 +117,9 @@ effects:
     center_of_pressure_b_m: null # 相对质心；启用时须实测/辨识后明确给出
   disturbances: []              # 支持世界/机体系、有时间窗和作用点的外力/力矩
   ou_wrench:                    # 随机外扰 d1/d2：力在世界系作用于质心，力矩在机体系；均值 + OU 噪声（平稳初始化、精确离散）
-    enabled: false
-    force_mean_w_n: [0.0, 0.0, 0.0]
-    force_std_w_n: [0.0, 0.0, 0.0]
+    enabled: true               # 默认开启；数值为演示量级，τ 待导师拍板
+    force_mean_w_n: [1.0, 0.0, 0.0]
+    force_std_w_n: [0.5, 0.5, 0.5]
     force_time_constant_s: 1.0
     torque_mean_b_nm: [0.0, 0.0, 0.0]
     torque_std_b_nm: [0.0, 0.0, 0.0]
@@ -128,7 +128,7 @@ effects:
     end_time_s: null            # null = 持续到结束
 
 model_mismatch:                 # 对象实际值 / 控制器与规划器所用标称值；全为 1 时无失配
-  mass_ratio: 1.0               # Δm：1.2 = 对象比控制器以为的重 20%
+  mass_ratio: 1.2               # Δm：默认 1.2 = 对象比控制器以为的重 20%
   inertia_ratio: [1.0, 1.0, 1.0]  # ΔI 逐轴
   thrust_coefficient_ratio: 1.0 # ΔK_T：实际每桨推力 = ratio × 控制器以为的推力
   reaction_torque_ratio: 1.0    # ΔK_D：实际反扭矩系数 / 标称

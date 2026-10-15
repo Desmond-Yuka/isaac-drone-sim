@@ -260,6 +260,7 @@ class SpinningBackend(FakeBackend):
 
 def test_rotor_gyroscopic_torque_follows_signed_rotor_speeds():
     cfg = load_config()
+    cfg["effects"]["ou_wrench"]["enabled"] = False
     cfg["vehicle"]["rotor_inertia_kg_m2"] = 2e-5
     backend = SpinningBackend()
     loop = MotionControlLoop(cfg, backend)
