@@ -1,11 +1,10 @@
 """Closed-loop numerical regression against traces recorded before the modular refactor.
 
 tests/data/golden_synthetic.npz was produced at commit 7a458b4 by the original
-MotionControlLoop flying the synthetic CPU plant, and regenerated on
-isaac-drone/Version3 when the rotor gyroscopic torque (vehicle.rotor_inertia_kg_m2)
-became part of the plant: the minimum-time helix config
-for 20 s and the hold config (airborne start at 200 rps) for 5 s, flown with the
-default OU wrench and model mismatch switched off (``NEUTRAL``). Rows are
+MotionControlLoop flying the synthetic CPU plant: the minimum-time helix config
+for 20 s and the hold config (airborne start at 200 rps) for 5 s. The Version3
+knobs (rotor gyroscopic torque, OU wrench, model mismatch) are pinned off
+(``NEUTRAL``), which reproduces those traces exactly. Rows are
 subsampled every ``<name>_stride`` physics steps (row k = state after step
 stride*(k+1)). Refactors must reproduce them to round-off; a deliberate change
 of flight behaviour must regenerate the file and say so in its commit.
@@ -25,6 +24,7 @@ GOLDEN = np.load(Path(__file__).parent / "data" / "golden_synthetic.npz")
 CONFIGS = {"helix": ROOT / "configs/helix.yaml", "hold": ROOT / "configs/arl_robot_1.yaml"}
 TOLERANCE = {"rtol": 1e-9, "atol": 1e-9}
 NEUTRAL = [
+    "vehicle.rotor_inertia_kg_m2=null",
     "effects.ou_wrench.enabled=false",
     "model_mismatch={mass_ratio: 1.0, inertia_ratio: [1.0, 1.0, 1.0], "
     "thrust_coefficient_ratio: 1.0, reaction_torque_ratio: 1.0}",

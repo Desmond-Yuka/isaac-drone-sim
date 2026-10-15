@@ -39,7 +39,7 @@ python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
 |---|---|
 | `simulation` | 物理步长 `dt`、控制降频、渲染间隔、设备、重力、随机种子、时长、原生 SimulationCfg 覆盖 |
 | `recording` | 可选多机位视频（仅 isaaclab 后端），见 README |
-| `vehicle` | 资产、旋翼方向及其来源、转子惯量 `rotor_inertia_kg_m2`（陀螺力矩，null 关闭）、推进器动力学、初态、`launch`（地面起飞、离地间隙、`spin_up_s` 起转时长）、原生/USD 覆盖 |
+| `vehicle` | 资产、旋翼方向及其来源、转子惯量 `rotor_inertia_kg_m2`（陀螺力矩，默认 null 关闭）、推进器动力学、初态、`launch`（地面起飞、离地间隙、`spin_up_s` 起转时长）、原生/USD 覆盖 |
 | `limits` | 控制器和轨迹规划**共用**的飞行包线：`max_tilt_rad`、`max_yaw_rate_rad_s`、`max_acceleration_m_s2` |
 | `controller` | `kind` + 该控制器的参数（见第 4 节） |
 | `allocation` | 有界加权分配的权重和正则化 |

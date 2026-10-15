@@ -33,7 +33,7 @@ vehicle:
   # 用户明确选择：对角同向仿真设定，并非实机测量。符号是反扭矩系数方向。
   rotor_directions: [-1, 1, 1, -1]
   rotor_direction_source: simulation_diagonal_pairs
-  rotor_inertia_kg_m2: 3.5e-5       # 桨+电机转子极转动惯量 J_r，陀螺力矩 ω×(J_r e3 Σσ_iΩ_i)；null 关闭。按 8 英寸桨估算的量级值，未实测
+  rotor_inertia_kg_m2: null         # 桨+电机转子极转动惯量 J_r，陀螺力矩 ω×(J_r e3 Σσ_iΩ_i)；默认 null 关闭。开启可填 3.5e-5（按 8 英寸桨估算的量级值，未实测）
   thrusters:
     thruster_names_expr: [back_left_prop, back_right_prop, front_left_prop, front_right_prop]
     thrust_range: [0.1, 10.0]       # 每桨 [N]，保留原模型的非零下限
