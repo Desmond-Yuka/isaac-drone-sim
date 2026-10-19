@@ -145,7 +145,14 @@ def run_simulation(
     """Inspect the vehicle, or fly the configured mission once; return the process exit code."""
     import isaaclab.sim as sim_utils
 
-    from isaac_drone.runtime.hooks import DisplayHook, FiguresHook, MetricsHook, PathOverlayHook, VideoHook
+    from isaac_drone.runtime.hooks import (
+        DisplayHook,
+        FiguresHook,
+        MetricsHook,
+        PathOverlayHook,
+        RunCardHook,
+        VideoHook,
+    )
     from isaac_drone.runtime.loop import MotionControlLoop
     from isaac_drone.runtime.runner import run_experiment
 
@@ -215,6 +222,7 @@ def run_simulation(
         hooks.append(DisplayHook(draw, config["simulation"]["render_interval"], pacer))
     hooks.append(MetricsHook(log=lambda text: print(text, flush=True)))
     hooks.append(FiguresHook(log=lambda text: print(text, flush=True)))
+    hooks.append(RunCardHook(log=lambda text: print(text, flush=True)))
 
     if wait_for_start:
         wait_for_enter(app, sim, pump_ui)

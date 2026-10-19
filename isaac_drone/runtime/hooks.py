@@ -1,4 +1,4 @@
-"""Standard run hooks: flown-path overlay, synchronized video, paced display, figures.
+"""Standard run hooks: flown-path overlay, synchronized video, paced display, figures, run card.
 
 Hooks observe completed physics steps. None of them changes physics, control
 timing or telemetry, so a run records identical data with or without them.
@@ -8,7 +8,10 @@ injected, keeping this module importable without Isaac Sim.
 
 from __future__ import annotations
 
+import shutil
+
 from isaac_drone.runtime.runner import RunHook
+from isaac_drone.telemetry.naming import VIDEO_DIR
 
 
 class PathOverlayHook(RunHook):
@@ -42,6 +45,8 @@ class VideoHook(RunHook):
     (RGB frames by camera name) and ``close()``. Frames are captured at t=0 and
     at every due sampling instant strictly before the run end; display pacing
     never drops video frames. Closing releases the rig before the encoders.
+    A finished recording's composite video is also copied to
+    ``<runs>/videos/<run name>.mp4``, so every run's video sits in one folder.
     """
 
     name = "video"
@@ -90,6 +95,19 @@ class VideoHook(RunHook):
         finally:
             if self.video is not None:
                 self.video.close()
+
+    def finalize(self, result):
+        summary = self.summary()
+        if summary is None or summary["failed"] or not summary["frames"]:
+            return
+        source = result.run_dir / summary["videos"]["combined"]["filename"]
+        target = result.run_dir.parent / VIDEO_DIR / f"{result.run_dir.name}{source.suffix}"
+        try:
+            target.parent.mkdir(exist_ok=True)
+            shutil.copy2(source, target)
+            self.log(f"Video copy: {target}")
+        except Exception as error:  # the copy is a convenience; the run directory keeps every original
+            self.log(f"Video not copied to {target.parent} ({error})")
 
 
 class DisplayHook(RunHook):
@@ -153,3 +171,18 @@ class MetricsHook(RunHook):
             write_metrics(result.run_dir)
         except Exception as error:  # metrics are derived data and never change the run result
             self.log(f"Metrics not written ({error}); retry: python -m isaac_drone summarize {result.run_dir}")
+
+
+class RunCardHook(RunHook):
+    """Write README.md (command, physics settings, video, result, figures); runs after metrics and figures."""
+
+    def __init__(self, log=print):
+        self.log = log
+
+    def finalize(self, result):
+        try:
+            from isaac_drone.analysis.catalog import write_run_card
+
+            write_run_card(result.run_dir)
+        except Exception as error:  # the card is derived from the run files and never changes the run result
+            self.log(f"README.md not written ({error}); retry: python -m isaac_drone runs --write-cards")

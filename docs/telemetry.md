@@ -1,12 +1,13 @@
 # 基础飞行数据记录
 
-导师要求的 position、velocity、acceleration、motor speeds、force、torque、position error 均有对应记录。运行一次仿真后，在 `runs/<时间_编号>/` 保存：
+导师要求的 position、velocity、acceleration、motor speeds、force、torque、position error 均有对应记录。运行一次仿真后，在 `runs/<月日-时分>_<实验名>_<后端>[_video]/`（命名规则见 README「运行目录」）保存：
 
 - `basic.csv`：每行一个已完成物理步，列名包含分量和单位，可用于 Excel、MATLAB、Python 绘图。
 - `telemetry.jsonl`：保留完整的步前/步后状态、控制输入、实际执行器状态和基础数据。
 - `telemetry_schema.json`：CSV 列与 JSON 字段的对应关系、单位、参考系、采样时间与来源说明。
 - `config.json` / `metadata.json`：实际配置（已展开 `extends` 与 `--set`）、后端描述、USD 层哈希（isaaclab）、机型属性、模型边界、任务阶段时间表 `mission_phases`、git commit 与命令行 `provenance`。
 - `metrics.json`：由 `telemetry.jsonl` 计算的整体和分阶段指标（`isaac_drone/analysis/metrics.py`），供 `summarize`、`compare`、`sweep` 共用。
+- `README.md`：运行卡片，由以上文件生成（`isaac_drone/analysis/catalog.py`）：命令行、代码版本、完整物理设置、视频、结果、分阶段指标和全部图像。`python -m isaac_drone runs` 用同样的信息列出所有运行。
 
 两个后端（`isaaclab`、`synthetic`）写出相同格式；合成后端没有 PhysX 求解器加速度，相应字段为空。
 
@@ -53,7 +54,7 @@
 
 ## 图像
 
-每次飞行结束后自动在 `runs/<运行目录>/plots/` 生成英文 PNG；CSV/JSONL 仍是原始数据，图像只是派生视图。也可以对任意一次运行（包括拷回本地的目录）重新生成，只需 NumPy 和 matplotlib：
+每次飞行结束后自动在 `runs/<运行目录>/plots/` 生成英文 PNG；CSV/JSONL 仍是原始数据，图像只是派生视图。标题第二行是运行目录名，第三行是物理设置（只列与理想对象不同的项，如 `OU force (1,0,0)±0.5 N τ 1 s; mass ×1.2`），图片单独拿出来也能看出是哪次运行。也可以对任意一次运行（包括拷回本地的目录）重新生成，只需 NumPy 和 matplotlib：
 
 ```bash
 python -m isaac_drone plot                  # 最新一次运行

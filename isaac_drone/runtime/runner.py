@@ -14,8 +14,10 @@ import subprocess
 import sys
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
+from isaac_drone.telemetry.naming import run_directory_name
 from isaac_drone.telemetry.recorder import RunRecorder
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -120,7 +122,15 @@ def _summaries(hooks) -> dict:
 
 
 def run_experiment(
-    loop, driver, config: dict, *, metadata: dict, hooks=(), log_root: Path | None = None, log=print
+    loop,
+    driver,
+    config: dict,
+    *,
+    metadata: dict,
+    hooks=(),
+    log_root: Path | None = None,
+    directory_name: str | None = None,
+    log=print,
 ) -> RunResult:
     """Fly one reset ``loop`` for the configured duration and record it.
 
@@ -128,12 +138,16 @@ def run_experiment(
     an achieved completion criterion. Records are written every
     ``logging.every_n_steps`` steps and always for the final step. An exception
     (including Ctrl+C) writes an ``aborted`` event, closes hooks and propagates.
+    The run directory is ``directory_name`` or, by default, named after the
+    start time, experiment, backend and video setting (telemetry.naming).
     """
     hooks = list(hooks)
     steps = physics_step_count(config["simulation"]["duration_s"], loop.dt_s)
     every = config["logging"]["every_n_steps"]
-    metadata = {**metadata, "provenance": provenance()}
-    with RunRecorder(log_root or resolve_log_root(config), config, metadata) as recorder:
+    started = datetime.now(timezone.utc)
+    metadata = {**metadata, "provenance": {**provenance(), "started_utc": started.isoformat(timespec="seconds")}}
+    name = directory_name or run_directory_name(config, metadata, started)
+    with RunRecorder(log_root or resolve_log_root(config), config, metadata, name=name) as recorder:
         log(f"Run records: {recorder.path}")
         context = RunContext(loop, driver, config, recorder.path, steps)
         try:

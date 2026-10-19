@@ -98,11 +98,16 @@ def _finite_tree(value, path="config"):
 
 
 def load_config(path: str | Path = DEFAULT_CONFIG, overrides=()) -> dict:
-    """Load a YAML experiment (resolving ``extends``), apply ``key.path=value`` overrides, validate."""
+    """Load a YAML experiment (resolving ``extends``), apply ``key.path=value`` overrides, validate.
+
+    A missing or null ``logging.run_name`` becomes the YAML file name (``helix`` for helix.yaml).
+    """
     config = load_yaml_tree(path)
     for assignment in overrides:
         apply_override(config, assignment)
     config.setdefault("recording", deepcopy(DEFAULT_RECORDING))
+    if isinstance(config.get("logging"), dict) and config["logging"].get("run_name") is None:
+        config["logging"]["run_name"] = Path(path).stem
     validate_config(config)
     return deepcopy(config)
 
@@ -314,9 +319,12 @@ def _validate_scene(scene):
 
 def _validate_logging(log):
     fields = {"directory", "every_n_steps", "flush_every_n_records"}
-    _keys(log, fields, fields, "logging")
+    _keys(log, fields | {"run_name"}, fields, "logging")
     if not isinstance(log["directory"], str) or not log["directory"]:
         raise ConfigurationError("logging.directory must be nonempty")
+    name = log.get("run_name")
+    if name is not None and (not isinstance(name, str) or not name.strip()):
+        raise ConfigurationError("logging.run_name must be a nonempty string or null")
     for field in ("every_n_steps", "flush_every_n_records"):
         _integer(log[field], f"logging.{field}", 1)
 

@@ -96,3 +96,7 @@ def test_sweep_runs_points_in_workers_and_ranks_them(tmp_path):
     for name in ("summary.csv", "summary.json", "summary.md"):
         assert (tmp_path / "sweep" / name).is_file()
     assert len(list((tmp_path / "sweep" / "points").glob("*/metrics.json"))) == 2
+    # Point directories are named by the row index, not by time.
+    assert {row["index"]: row["run_dir"] for row in rows} == {
+        index: str(tmp_path / "sweep" / "points" / f"{index:02d}") for index in (0, 1)
+    }

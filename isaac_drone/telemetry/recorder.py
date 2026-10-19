@@ -12,16 +12,16 @@ import csv
 import hashlib
 import json
 import math
-import uuid
 from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass, is_dataclass
-from datetime import datetime, timezone
 from io import StringIO
 from numbers import Real
 from pathlib import Path
 
 import numpy as np
+
+from .naming import create_unique_directory, run_directory_name
 
 
 def json_value(value):
@@ -746,7 +746,13 @@ def _basic_csv_row(basic):
 
 
 class RunRecorder:
-    def __init__(self, directory, config, metadata):
+    """Create ``directory/<name>`` and stream one run's records into it.
+
+    ``name`` defaults to ``run_directory_name(config, metadata)`` (start time,
+    experiment, backend, video marker). A taken name gets ``_2``, ``_3``, ...
+    """
+
+    def __init__(self, directory, config, metadata, *, name=None):
         # Validate serializability/config before creating a partially initialized
         # run directory. JSON disallows NaN/infinity everywhere, including metadata.
         config_json = dump_json(config) + "\n"
@@ -755,9 +761,7 @@ class RunRecorder:
         interval = config["logging"]["flush_every_n_records"]
         if isinstance(interval, (bool, np.bool_)) or not isinstance(interval, (int, np.integer)) or interval < 1:
             raise ValueError("flush_every_n_records must be a positive integer")
-        label = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
-        self.path = Path(directory).expanduser() / label
-        self.path.mkdir(parents=True, exist_ok=False)
+        self.path = create_unique_directory(directory, name or run_directory_name(config, metadata))
         (self.path / "config.json").write_text(config_json, encoding="utf-8")
         (self.path / "metadata.json").write_text(metadata_json, encoding="utf-8")
         (self.path / "telemetry_schema.json").write_text(schema_json, encoding="utf-8")

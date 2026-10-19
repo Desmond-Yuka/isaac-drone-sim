@@ -94,16 +94,29 @@ CPU 合成对象上、关闭默认 OU 外扰与质量失配（`--set effects.ou_
 
 ## 运行目录
 
-每次运行写入 `runs/<UTC时间_编号>/`，两个后端格式相同：
+每次运行写入 `runs/<月日-时分>_<实验名>_<后端>[_video]/`，例如 `runs/1014-2007_helix_isaac_video/`：10-14 20:07 开始、`configs/helix.yaml`、Isaac 后端（合成后端为 `synth`）、录了视频。时间统一按美东时间（`isaac_drone/telemetry/naming.py` 的 `RUN_TIMEZONE`），服务器和本机生成的名字一致；精确的 UTC 开始时间在 `metadata.json` 的 `provenance.started_utc`。实验名默认取 YAML 文件名，可用 `--set logging.run_name=xxx` 改；同一分钟重名时自动加 `_2`、`_3`。
+
+外扰、模型失配等物理设置不放进名字，看每个运行目录里的 `README.md`，或用总表一次看全部运行：
+
+```bash
+python -m isaac_drone runs                 # 一行一次运行：开始时间、配置、后端、视频、物理设置、结果、位置 RMS、目录名
+python -m isaac_drone runs --video         # 只看录了视频的；--config helix 只看某个配置；--last 10 只看最近 10 次
+python -m isaac_drone runs --write-cards   # 给列出的运行（含旧运行）补写/重写 README.md
+```
+
+物理设置一栏只列与理想对象（无外扰、无失配、无陀螺力矩、seed 0）不同的项，例如 `OU force (1,0,0)±0.5 N τ 1 s; mass ×1.2`，取自该次运行实际生效的 `config.json`，不受之后 YAML 默认值修改的影响。2026-10-19 之前的运行目录仍是 `<UTC时间>Z_<随机编号>` 旧名，总表同样能列出；schema 1 的早期运行没有记录配置名和命令行，相应栏显示 `?`。
+
+两个后端的运行目录格式相同：
 
 | 文件 | 内容 |
 |---|---|
+| `README.md` | 运行卡片：命令行、代码版本、完整物理设置、视频、结果、分阶段指标，并嵌入全部图像（在 VS Code 里打开预览） |
 | `config.json` | 实际使用的完整配置（已展开 `extends`、`--set`） |
-| `metadata.json` | 后端描述、资产层哈希、任务阶段时间表、可行性/最短时间规划报告、git commit 与命令行 |
+| `metadata.json` | 后端描述、资产层哈希、任务阶段时间表、可行性/最短时间规划报告、git commit、命令行与开始时间 |
 | `telemetry.jsonl` / `basic.csv` / `telemetry_schema.json` | 每物理步的完整记录、便于 Excel/MATLAB 的基础数据表、字段单位与含义 |
 | `metrics.json` | 整体和分阶段指标（位置/速度/姿态误差、倾角、速度、电机转速范围、饱和比例、推力） |
-| `plots/*.png` | 理想 vs 实际及误差曲线（需 matplotlib） |
-| `*.mp4`、`video_frames.jsonl` | 仅在 `--record-video` 时生成 |
+| `plots/*.png` | 理想 vs 实际及误差曲线（需 matplotlib）；标题注明运行目录名和物理设置 |
+| `*.mp4`、`video_frames.jsonl` | 仅在 `--record-video` 时生成；拼屏视频另复制一份到 `runs/videos/<运行目录名>.mp4` |
 
 位置、速度、加速度、姿态、角速度、电机转速、单桨推力、力和力矩都同时记录**理想值、实际值和误差（理想 − 实际）**。字段定义、时间对齐和误差符号见 [docs/telemetry.md](docs/telemetry.md)。
 
@@ -136,6 +149,8 @@ python -m isaac_drone run --backend isaaclab --visualizer none --record-video --
 | `follow.mp4` | 斜后上方跟随实际质心，保持稳定地平线 |
 | `top.mp4` | 动态俯视，始终在实际位置正上方 |
 | `combined.mp4` | 同步拼屏：三路时全景在上、跟随与俯视在下；两路左右并排 |
+
+录制成功结束后，`combined.mp4` 另复制一份到 `runs/videos/<运行目录名>.mp4`，所有运行的视频集中在一个文件夹里，文件名就是运行目录名；运行目录里的原始文件保持不变。录制失败或中途 `Ctrl+C` 的运行不复制。
 
 YAML 的 `recording` 段设置默认值（`enabled/fps/width/height/cameras`），命令行只覆盖当次运行；只改帧率、尺寸或机位不会自动开启录制。帧率不超过物理频率，尺寸为正偶数。各机位在同一物理时刻统一渲染，按仿真时间轴编码：`--playback-speed`、显示跳帧、机器快慢都不改变视频时间轴。结束或 `Ctrl+C` 时会关闭编码器并保存已录片段。
 

@@ -152,6 +152,7 @@ completion: null                # null = 不设悬停完成判据；运行完所
 
 logging:
   directory: runs
+  run_name: null               # 运行目录名里的实验名；null = YAML 文件名（如 helix）。目录名：<月日-时分>_<实验名>_<isaac|synth>[_video]
   every_n_steps: 1             # 默认每个物理步记录：200 Hz，包含完整基础运动数据
   flush_every_n_records: 100
 

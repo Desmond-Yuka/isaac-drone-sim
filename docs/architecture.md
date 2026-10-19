@@ -174,7 +174,7 @@ WebRTC 串流用 `--livestream 1`（公网，`PUBLIC_IP` 指定服务器 IP）�
 
 `MultiViewRecorder`（`viz/video.py`）以整数帧索引计算 `index/fps` 采样时刻，与 `render_interval`、墙钟显示节流分离。初始化相机/等待输入不编码；从任务 t=0 起采样，在到达采样时刻的物理步取图，终点处仅补齐早于终点的采样时刻。每次图像同时送入独立 MP4 与 `combined.mp4`，同步拼屏不经过事后时间匹配。编码器采用流式 FFmpeg/H.264（[imageio-ffmpeg 提供可执行文件](https://github.com/imageio/imageio-ffmpeg)），不会将整个实验的原始帧堆积在内存中。`video_frames.jsonl` 记录编码帧索引/视频时间/实际仿真采样时间；结束/中止事件记录各文件帧数及编码状态。运行器在正常完成、仿真停止及异常（含 Ctrl+C）时按相反顺序关闭全部钩子资源（相机先于编码器）。
 
-运行结果默认写到 `runs/<UTC时间_唯一编号>/`，包含配置快照、实际物理参数、任务阶段时间表、git commit 与命令行、`telemetry.jsonl`、`basic.csv`、`telemetry_schema.json` 和 `metrics.json`；isaaclab 后端另记录所有本地 USD 层 SHA256。默认每物理步记录一次（当前200 Hz），包含位置、速度、加速度、四电机转速、力/力矩及位置误差；日志区分期望、分配结果、原生电机实际输出、附加力与运动推导的净作用。禁用电池记录 null，不记录虚构 SOC。完整字段和时间语义见 [telemetry.md](telemetry.md)。
+运行结果默认写到 `runs/<月日-时分>_<实验名>_<后端>[_video]/`（美东时间，`telemetry/naming.py`；重名加 `_2`），包含配置快照、实际物理参数、任务阶段时间表、git commit、命令行与 UTC 开始时间、`telemetry.jsonl`、`basic.csv`、`telemetry_schema.json`、`metrics.json` 和由它们生成的运行卡片 `README.md`（`analysis/catalog.py`，也供 `runs` 总表使用）；isaaclab 后端另记录所有本地 USD 层 SHA256，录制成功时把拼屏视频复制到 `runs/videos/<运行目录名>.mp4`。默认每物理步记录一次（当前200 Hz），包含位置、速度、加速度、四电机转速、力/力矩及位置误差；日志区分期望、分配结果、原生电机实际输出、附加力与运动推导的净作用。禁用电池记录 null，不记录虚构 SOC。完整字段和时间语义见 [telemetry.md](telemetry.md)。
 
 三维 helix 入口：
 

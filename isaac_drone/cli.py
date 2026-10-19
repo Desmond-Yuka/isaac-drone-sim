@@ -127,15 +127,27 @@ def build_parser():
         default="position_error_rms_m",
         help="Metric to sort by, ascending (default: %(default)s; per phase: helix.position_error_rms_m)",
     )
-    sweep.add_argument("--output", type=Path, help="Sweep directory (default: runs/sweep_<UTC time>)")
+    sweep.add_argument("--output", type=Path, help="Sweep directory (default: runs/sweep_<MMDD-HHMM>)")
     sweep.add_argument("--figures", action="store_true", help="Also write PNG figures for every point")
 
     compare = commands.add_parser("compare", help="Metrics table and overlaid figures for several runs")
     compare.add_argument("run_dirs", nargs="+", type=Path, help="Run directories to compare")
     compare.add_argument("--labels", nargs="+", help="One label per run (default: directory names)")
     compare.add_argument("--phase", help="Compare one mission phase (e.g. helix) instead of the whole run")
-    compare.add_argument("--output", type=Path, help="Output directory (default: runs/compare_<UTC time>)")
+    compare.add_argument("--output", type=Path, help="Output directory (default: runs/compare_<MMDD-HHMM>)")
     compare.add_argument("--no-figures", action="store_true", help="Only write the table")
+
+    runs = commands.add_parser(
+        "runs",
+        help="Table of recorded runs: start time, config, backend, video, physics settings, result",
+        description="One line per run directory under runs/ (start times in America/New_York). "
+        "Old runs are described from the files they already contain.",
+    )
+    runs.add_argument("--runs-dir", type=Path, help="Where the runs are (default: runs/)")
+    runs.add_argument("--video", action="store_true", help="Only runs that recorded video")
+    runs.add_argument("--config", dest="config_name", help="Only runs of this config, e.g. helix or configs/helix.yaml")
+    runs.add_argument("--last", type=int, metavar="N", help="Only the N most recent runs")
+    runs.add_argument("--write-cards", action="store_true", help="Also (re)write README.md in every listed run")
 
     for name, text in (("plot", "Write PNG figures for a run"), ("summarize", "Per-phase table for a run")):
         command = commands.add_parser(name, help=text)
@@ -165,12 +177,6 @@ def _default_runs_dir(args) -> Path:
     from isaac_drone.runtime.runner import REPO_ROOT
 
     return getattr(args, "runs_dir", None) or REPO_ROOT / "runs"
-
-
-def _utc_stamp() -> str:
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _validate_report(config, asset_path) -> dict:
@@ -210,12 +216,33 @@ def main(argv=None) -> int:
             print(summarize_run(args.run_dir or latest_telemetry(_default_runs_dir(args))))
         return 0
 
+    if command == "runs":
+        if unknown:
+            parser.error("unrecognized arguments: " + " ".join(unknown))
+        if args.last is not None and args.last < 1:
+            parser.error("--last must be a positive integer")
+        from isaac_drone.analysis.catalog import format_table, list_runs, write_run_card
+
+        rows = list_runs(_default_runs_dir(args))
+        if args.video:
+            rows = [row for row in rows if row["video"] != "-"]
+        if args.config_name:
+            rows = [row for row in rows if row["config"] == Path(args.config_name).stem]
+        if args.last:
+            rows = rows[-args.last :]
+        if args.write_cards:
+            for row in rows:
+                write_run_card(row["path"])
+        print(format_table(rows) if rows else "No matching runs")
+        return 0
+
     if command == "compare":
         if unknown:
             parser.error("unrecognized arguments: " + " ".join(unknown))
         from isaac_drone.analysis.compare import compare_runs
+        from isaac_drone.telemetry.naming import available_path, stamp
 
-        output = args.output or _default_runs_dir(args) / f"compare_{_utc_stamp()}"
+        output = args.output or available_path(_default_runs_dir(args), f"compare_{stamp()}")
         report = compare_runs(args.run_dirs, output, labels=args.labels, phase=args.phase, figures=not args.no_figures)
         print(report["table"])
         print(f"\nWritten: {', '.join(str(path) for path in report['files'])}")

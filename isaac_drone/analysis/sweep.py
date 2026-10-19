@@ -3,8 +3,9 @@
 ``--grid key.path=[v1, v2, ...]`` axes are combined as a Cartesian product and
 applied like ``--set`` overrides on top of the experiment config. All points
 are validated before any flight starts. Runs execute in parallel worker
-processes and are written under ``<sweep dir>/points/``; ``summary.csv``,
-``summary.json`` and ``summary.md`` rank them by one metric.
+processes and are written under ``<sweep dir>/points/<index>/``, the index of
+the point's row in ``summary.csv``, ``summary.json`` and ``summary.md``, which
+rank them by one metric.
 """
 
 from __future__ import annotations
@@ -13,11 +14,11 @@ import csv
 import itertools
 import json
 from concurrent.futures import ProcessPoolExecutor
-from datetime import datetime, timezone
 from pathlib import Path
 
 from isaac_drone.config import ConfigurationError, load_config
 from isaac_drone.config.loader import parse_yaml
+from isaac_drone.telemetry.naming import available_path, stamp
 
 
 def parse_grid(items) -> list[tuple[str, list]]:
@@ -48,14 +49,14 @@ def _overrides(point: dict) -> list[str]:
 
 def _run_point(job) -> dict:
     """Worker: fly one point and return its flat metrics row (errors are reported, not raised)."""
-    index, config_path, base, point, points_dir, figures = job
+    index, name, config_path, base, point, points_dir, figures = job
     from isaac_drone.analysis.metrics import compute_metrics, flatten
     from isaac_drone.sim.synthetic import run_simulation
 
     row = {"index": index, **{f"param:{key}": json.dumps(value) for key, value in point.items()}}
     try:
         config = load_config(config_path, overrides=[*base, *_overrides(point)])
-        result = run_simulation(config, figures=figures, log=lambda *_: None, log_root=points_dir)
+        result = run_simulation(config, figures=figures, log=lambda *_: None, log_root=points_dir, directory_name=name)
         metrics_path = result.run_dir / "metrics.json"
         metrics = json.loads(metrics_path.read_text()) if metrics_path.is_file() else compute_metrics(result.run_dir)
         row.update({"run_dir": str(result.run_dir), "error": None, **flatten(metrics)})
@@ -90,13 +91,13 @@ def run_sweep(
     if output_dir is None:
         from isaac_drone.runtime.runner import REPO_ROOT
 
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        output_dir = Path(runs_root or REPO_ROOT / "runs") / f"sweep_{stamp}"
+        output_dir = available_path(runs_root or REPO_ROOT / "runs", f"sweep_{stamp()}")
     output = Path(output_dir)
     (output / "points").mkdir(parents=True, exist_ok=True)
     log(f"Sweep: {len(points)} runs of {config_path} -> {output}")
+    digits = max(2, len(str(len(points) - 1)))
     jobs = [
-        (index, str(config_path), list(base_overrides), point, str(output / "points"), figures)
+        (index, f"{index:0{digits}d}", str(config_path), list(base_overrides), point, str(output / "points"), figures)
         for index, point in enumerate(points)
     ]
     rows = []

@@ -243,9 +243,9 @@ class SyntheticDriver:
         pass
 
 
-def run_simulation(config: dict, *, figures: bool = True, log=print, log_root=None, hooks=()):
+def run_simulation(config: dict, *, figures: bool = True, log=print, log_root=None, hooks=(), directory_name=None):
     """Fly the configured mission once on the synthetic plant and record a standard run directory."""
-    from isaac_drone.runtime.hooks import FiguresHook, MetricsHook
+    from isaac_drone.runtime.hooks import FiguresHook, MetricsHook, RunCardHook
     from isaac_drone.runtime.loop import MotionControlLoop
     from isaac_drone.runtime.runner import run_experiment
 
@@ -267,7 +267,14 @@ def run_simulation(config: dict, *, figures: bool = True, log=print, log_root=No
         **loop.run_metadata(),
         "limitations": description["limitations"],
     }
-    hooks = [*hooks, MetricsHook(log), *([FiguresHook(log)] if figures else [])]
+    hooks = [*hooks, MetricsHook(log), *([FiguresHook(log)] if figures else []), RunCardHook(log)]
     return run_experiment(
-        loop, SyntheticDriver(backend), config, metadata=metadata, hooks=hooks, log_root=log_root, log=log
+        loop,
+        SyntheticDriver(backend),
+        config,
+        metadata=metadata,
+        hooks=hooks,
+        log_root=log_root,
+        directory_name=directory_name,
+        log=log,
     )

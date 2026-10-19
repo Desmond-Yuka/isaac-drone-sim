@@ -47,7 +47,7 @@ python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
 | `completion` | 终点悬停完成判据；`null` 表示不设判据（跑完所有步即成功） |
 | `effects` | 常值外力/力矩、`ou_wrench` 随机外扰（力世界系、力矩机体系，均值 + 逐轴标准差 + 相关时间）、风、气动阻力；`ou_wrench` 默认开启（力均值 [1,0,0] N、各轴标准差 0.5 N、τ=1 s；`helix.yaml` 从起转结束 2 s 起作用），其余默认关闭 |
 | `model_mismatch` | 对象实际值 / 控制器标称值之比：`mass_ratio`、`inertia_ratio`、`thrust_coefficient_ratio`、`reaction_torque_ratio`；全为 1 时无失配，默认 `mass_ratio: 1.2` |
-| `scene` / `logging` | 地面与灯光；日志目录、记录间隔、刷新间隔 |
+| `scene` / `logging` | 地面与灯光；日志目录、运行目录名里的实验名 `run_name`（`null` = YAML 文件名，目录名规则见 README「运行目录」）、记录间隔、刷新间隔 |
 
 `vehicle.launch.spin_up_s`：起转阶段参考保持起点，电机指令乘以 0→1 的平滑包络；轨迹在起转结束时刻才开始。地面起飞必须 > 0。地面起飞时轨迹锚定在后端真值（物理放置位置）；空中起始锚定在控制器看到的状态（可以是估计器输出）。
 
@@ -131,7 +131,7 @@ python -m isaac_drone sweep --config configs/helix_cascaded_pid.yaml \
 python -m isaac_drone compare runs/<A> runs/<B> --labels geometric pid --phase helix
 ```
 
-扫参开始前会先校验所有点的配置；单个点发散只记为失败，不会中断整个扫参。结果写在 `runs/sweep_<时间>/summary.{csv,json,md}`，按 `--rank` 指标升序排列；指标名见 `isaac_drone/analysis/metrics.py`（整体指标直接写名字，分阶段写 `阶段名.指标名`）。
+扫参开始前会先校验所有点的配置；单个点发散只记为失败，不会中断整个扫参。结果写在 `runs/sweep_<月日-时分>/summary.{csv,json,md}`，按 `--rank` 指标升序排列；每个点的运行目录是 `points/<序号>/`，序号即 summary 里的 `index` 列；指标名见 `isaac_drone/analysis/metrics.py`（整体指标直接写名字，分阶段写 `阶段名.指标名`）。
 
 ## 8. 从 schema_version 1 迁移
 

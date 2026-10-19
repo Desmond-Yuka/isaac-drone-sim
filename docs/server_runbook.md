@@ -44,8 +44,10 @@ python -m isaac_drone validate --config configs/helix.yaml   # 可选：几秒�
 
 ```bash
 mkdir -p runs && PYTHONUNBUFFERED=1 PUBLIC_IP=117.50.205.33 python -m isaac_drone run --backend isaaclab \
-    --config configs/helix.yaml --livestream 1 --wait-for-start 2>&1 | tee runs/helix_$(date +%m%d-%H%M).log
+    --config configs/helix.yaml --livestream 1 --wait-for-start 2>&1 | tee runs/helix_$(TZ=America/New_York date +%m%d-%H%M).log
 ```
+
+日志名与运行目录名用同一个时钟（美东时间）；服务器自己的时钟是 UTC+8，不加 `TZ=` 会差 12–13 小时。
 
 等终端出现 `Scene ready: connect the stream client, then press Enter here to start.`（通常约 1 分钟；开机后首次运行需编译着色器，可能 2–3 分钟）。此时无人机停在地上，物理不推进。
 
@@ -59,10 +61,12 @@ mkdir -p runs && PYTHONUNBUFFERED=1 PUBLIC_IP=117.50.205.33 python -m isaac_dron
 
 ```bash
 python -m isaac_drone summarize              # 最新一次运行的分阶段误差、倾角、电机转速、饱和比例
+python -m isaac_drone runs --last 5          # 最近 5 次运行的配置、视频、物理设置和结果
 ls runs/<运行目录名>/plots/                    # 飞完自动生成的英文图；重画：python -m isaac_drone plot
+ls runs/videos/                              # 录过视频的运行，每次一个拼屏 MP4，文件名即运行目录名
 ```
 
-拷回本地（在本地仓库根目录运行，增量同步全部运行记录到本地 `runs/`）：`rsync -az --info=progress2 uc1:isaac-drone-sim/runs/ runs/`。本地同样可以 `summarize`、`plot`、`compare`。不用时在控制台关机。
+拷回本地（在本地仓库根目录运行，增量同步全部运行记录到本地 `runs/`，`runs/videos/` 一并同步）：`rsync -az --info=progress2 uc1:isaac-drone-sim/runs/ runs/`。本地同样可以 `runs`、`summarize`、`plot`、`compare`。不用时在控制台关机。
 
 ## 注意
 
