@@ -9,7 +9,14 @@ import pytest
 
 pytest.importorskip("matplotlib")
 
-from isaac_drone.analysis.plots import latest_run, load_basic_csv, phase_starts, plot_run
+from isaac_drone.analysis.plots import (
+    _tracking,
+    latest_run,
+    load_basic_csv,
+    phase_starts,
+    plot_comparison,
+    plot_run,
+)
 from isaac_drone.core.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
 from isaac_drone.telemetry import RunRecorder
 from isaac_drone.telemetry.measurements import build_basic_record
@@ -77,6 +84,50 @@ def test_plot_run_writes_every_figure_and_leaves_data_untouched(tmp_path):
     assert all(path.parent == run / "plots" and path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" for path in paths)
     assert {name: (run / name).read_bytes() for name in before} == before
     assert latest_run(tmp_path) == run
+
+
+def test_plot_comparison_overlays_runs_in_the_same_figure_set(tmp_path):
+    first, second = recorded_run(tmp_path / "a"), recorded_run(tmp_path / "b")
+    paths = plot_comparison([first, second], ["base", "ou"], tmp_path / "out")
+    assert {path.name for path in paths} == FIGURES
+    assert all(path.parent == tmp_path / "out" and path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" for path in paths)
+    with pytest.raises(ValueError, match="one label per run"):
+        plot_comparison([first, second], ["only"], tmp_path / "bad")
+
+
+def test_comparison_draws_a_shared_target_once_and_one_error_row_per_run(tmp_path):
+    base = load_basic_csv(recorded_run(tmp_path / "a") / "basic.csv")
+    shifted = {**base, "position_w_x_m": base["position_w_x_m"] + 0.1}
+    runs = [("base", base), ("shifted", shifted)]
+    figure = _tracking(
+        runs,
+        "",
+        [],
+        "Position",
+        "m",
+        0.1,
+        ("x", "y", "z"),
+        *(f"{p}_{{c}}_m" for p in ("position_w", "target_position_w", "position_error_w")),
+    )
+    axes = figure.axes
+    assert len(axes) == 5 and [ax.get_ylabel() for ax in axes[3:]] == ["base error [m]", "shifted error [m]"]
+    assert axes[0].get_legend_handles_labels()[1] == ["base: Actual", "shifted: Actual", "Target"]
+    assert axes[3].get_ylim() == axes[4].get_ylim()
+    # A command that differs between runs is drawn per run.
+    commanded = {**shifted, "target_position_w_x_m": shifted["target_position_w_x_m"] + 1}
+    figure = _tracking(
+        [runs[0], ("shifted", commanded)],
+        "",
+        [],
+        "Position",
+        "m",
+        0.1,
+        ("x",),
+        "position_w_{c}_m",
+        "target_position_w_{c}_m",
+        "position_error_w_{c}_m",
+    )
+    assert figure.axes[0].get_legend_handles_labels()[1][2:] == ["base: Target", "shifted: Target"]
 
 
 def test_blank_cells_are_nan_and_text_columns_are_skipped(tmp_path):

@@ -1,5 +1,8 @@
 """Compare several runs: a metrics table (Markdown + CSV) and overlaid figures.
 
+Up to four runs also get the per-run figure set (position.png, ...) with all
+runs overlaid in each figure, e.g. a disturbed run against its undisturbed twin.
+
 Typical use: the same trajectory flown by different controllers or gains, e.g.
 ``python -m isaac_drone compare runs/A runs/B --labels geometric pid``.
 """
@@ -13,7 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from .metrics import METRIC_KEYS, compute_metrics
-from .plots import load_basic_csv, phase_starts
+from .plots import RUN_COLORS, load_basic_csv, phase_starts, plot_comparison
 
 TABLE_KEYS = ("success", "completion_time_s", *METRIC_KEYS)
 
@@ -70,7 +73,10 @@ def write_csv(rows, path) -> Path:
 
 
 def comparison_figures(run_dirs, labels, output_dir) -> list[Path]:
-    """Position-error, tilt and top-view path overlays of all runs (matplotlib, headless)."""
+    """Position-error, tilt and top-view path overlays of all runs (matplotlib, headless).
+
+    With at most len(RUN_COLORS) runs, also every per-run figure with the runs overlaid.
+    """
     from matplotlib.figure import Figure
 
     output = Path(output_dir)
@@ -130,6 +136,8 @@ def comparison_figures(run_dirs, labels, output_dir) -> list[Path]:
     axis.set_title("Top view (world frame)")
     paths.append(output / "compare_top_view.png")
     figure.savefig(paths[-1], dpi=150)
+    if len(run_dirs) <= len(RUN_COLORS):
+        paths += plot_comparison(run_dirs, labels, output)
     return paths
 
 
