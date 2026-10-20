@@ -52,6 +52,22 @@
 - 目标在控制周期内保持不变（默认物理 200 Hz、控制 100 Hz），实际值每个物理步都在变化，所以误差在相邻两步之间会有小幅锯齿，这是保持目标的真实结果，不是记录错误。
 - 没有理想值来源时（例如旧版日志或自定义后端），相应理想值和误差列留空，不填 0。
 
+## 风与扰动
+
+这些列排在原有列之后（原有列的位置不变）；对应模型没开时整列留空。采样时刻都是物理步开始时、作用于本步的值。
+
+| 字段 | 含义 |
+|---|---|
+| `wind_w_m_s` / `wind_mean_w_m_s` / `wind_turbulence_w_m_s` / `wind_speed_m_s` | 质心处的世界系风速，以及其中确定性部分（均值 + 梯度 + 阵风）、OU 湍流部分和风速大小；风场时间窗外为 0 |
+| `rotor_axial_wind_m_s` | 每个桨处沿桨轴的风速分量（上升气流为正） |
+| `rotor_speed_offset_rps` / `_rpm` | 风换算成的每桨等效转速偏移，加在电机模型之后 |
+| `rotor_speed_effective_rps` / `_rpm` | 电机转速 + 偏移，即有风时实际推力对应的等效转速；不是电机状态 |
+| `force_wind_drag_b_n` | 桨盘平面内的风阻力（机体系，作用在质心），已计入 `force_disturbance_b_n` |
+| `force_ou_w_n` / `force_ou_mean_w_n` | 旧的质心 OU 随机力（世界系）实际施加值及其均值；时间窗外为 0，已计入扰动合力 |
+| `torque_ou_b_nm` / `torque_ou_mean_b_nm` | OU 随机力矩（机体系）实际施加值及其均值 |
+
+有风作用到旋翼时，`motor_thrust_applied_n` 是实际加在桨叶上的推力 kf·(RPS + 偏移)²，所以 `motor_thrust_error_n`、`force_error_b_n`、`torque_error_b_nm` 里也包含风对旋翼的影响；`motor_speed_rps` 仍是电机状态本身。
+
 ## 图像
 
 每次飞行结束后自动在 `runs/<运行目录>/plots/` 生成英文 PNG；CSV/JSONL 仍是原始数据，图像只是派生视图。标题第二行是运行目录名，第三行是物理设置（只列与理想对象不同的项，如 `OU force (1,0,0)±0.5 N τ 1 s; mass ×1.2`），图片单独拿出来也能看出是哪次运行。也可以对任意一次运行（包括拷回本地的目录）重新生成，只需 NumPy 和 matplotlib：
@@ -66,8 +82,12 @@ python -m isaac_drone plot runs/<运行目录>   # 指定运行
 | `trajectory_3d.png` | 质心三维轨迹与俯视图，实际 vs 目标 |
 | `position.png` / `velocity.png` / `acceleration.png` | 三轴实际 vs 目标，末行为误差和误差模长（图例给出最大值和 RMS）；加速度另画 PhysX 求解器值 |
 | `attitude.png` / `angular_velocity.png` | 滚转/俯仰/偏航（deg）与机体角速度（deg/s），实际 vs 期望，末行为误差 |
-| `motor_speed.png` / `rotor_thrust.png` | 四个电机转速（rpm）与单桨推力，实际 vs 命令，末行为误差 |
+| `motor_speed.png` / `rotor_thrust.png` | 四个电机转速（rpm）与单桨推力，实际 vs 命令，末行为误差；有风作用到旋翼时转速图另画等效转速 |
 | `force.png` / `torque.png` | 机体系力/力矩，电机输出 vs 控制需求，末行为误差 |
+| `wind.png` | 质心处世界系风速三轴：实际风速 vs 均值 + 阵风，末行为 OU 湍流部分及其模长（最大值、RMS）。仅开了风场的运行才画 |
+| `rotor_wind.png` | 每桨等效转速 vs 电机转速，末行为风造成的转速偏移。仅开了 `rotor_wind.axial` 的运行才画 |
+| `wind_drag.png` | 桨盘平面内的风阻力（机体系）。仅开了 `rotor_wind.inplane_drag` 的运行才画 |
+| `ou_force.png` / `ou_torque.png` | 旧的质心 OU 随机力（世界系）/ 力矩（机体系）：实际施加值 vs 均值，末行为 OU 随机部分。仅开了 `ou_wrench` 且该项不全为 0 的运行才画 |
 
 竖虚线为任务阶段分界（取自 `metadata.json` 的 `mission_phases`，例如 spin_up / takeoff / helix / hold；旧版运行目录按原先的 delay / takeoff / helix / hold 边界）。旧版日志缺少的误差列会在画图时用"理想 − 实际"补算，缺少理想值的量只画实际值。
 

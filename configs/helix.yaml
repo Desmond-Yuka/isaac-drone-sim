@@ -20,6 +20,8 @@ vehicle:
 effects:
   ou_wrench:
     start_time_s: 2.0           # 地面起转（spin_up_s）结束后才施加外扰，避免飞机在地面被推滑、压倾
+  wind:
+    start_time_s: 2.0           # 风同样在起转结束时直接出现
 
 limits:
   max_tilt_rad: 1.3962634015954636      # 80°：最快 helix 名义倾角约 68°，其余留给反馈

@@ -399,6 +399,7 @@ class ARLBackend:
         self._last_command = np.zeros(4)
         self._last_external = Wrench.zero()
         self._last_total = Wrench.zero()
+        self._last_offsets = np.zeros(4)
         self._has_submitted_wrench = False
         self._initialize_speed_actuators()
         self._extract_geometry()
@@ -646,9 +647,24 @@ class ARLBackend:
             thrust_n, parameters["sampled_kf"], parameters["thrust_min_n"], parameters["thrust_max_n"]
         )
 
-    def apply_motor_speeds(self, target_rps, external_wrench):
-        """Advance native RPS dynamics once and apply forces to the four prop bodies."""
+    def _wind_thrust(self, offsets):
+        """k_f (rps + offset)^2 per rotor in canonical order; a rotor cannot spin backwards."""
+        parameters = self.motor_parameters()
+        return parameters["sampled_kf"] * np.maximum(parameters["current_rps"] + offsets, 0.0) ** 2
+
+    def apply_motor_speeds(self, target_rps, external_wrench, rotor_speed_offset_rps=None):
+        """Advance native RPS dynamics once and apply forces to the four prop bodies.
+
+        ``rotor_speed_offset_rps`` (canonical order) is the wind's equivalent speed
+        offset, added after the motor model: the prop forces and reaction torques
+        then use k_f (rps + offset)^2, while the native motor state is unchanged.
+        """
         command = finite_array(target_rps, (4,), "target motor rps")
+        offsets = (
+            np.zeros(4)
+            if rotor_speed_offset_rps is None
+            else finite_array(rotor_speed_offset_rps, (4,), "rotor speed offset")
+        )
         if np.any(command < 0):
             raise ValueError("Motor speed commands must be nonnegative magnitudes")
         if self._allocation_rank < 4:
@@ -670,6 +686,9 @@ class ARLBackend:
             self.robot.data.computed_thrust[:, indices] = actuator.curr_thrust
             self.robot.data.applied_thrust[:, indices] = actuator.applied_thrust
         applied = _numpy(self.robot.data.applied_thrust)[0][self._canonical_to_native]
+        self._last_offsets = offsets
+        if np.any(offsets):
+            applied = self._wind_thrust(offsets)
         arrays = self._propeller_wrench_arrays(applied, external_wrench)
         self._submit_body_wrenches(*arrays)
         self._last_tick = tick
@@ -754,6 +773,7 @@ class ARLBackend:
         self._last_tick = None
         self._last_command = _numpy(self.robot.data.thrust_target)[0][self._canonical_to_native].copy()
         self._last_external, self._last_total = Wrench.zero(), Wrench.zero()
+        self._last_offsets = np.zeros(4)
         self._has_submitted_wrench = False
 
     def _motor_telemetry(self):
@@ -846,6 +866,9 @@ class ARLBackend:
         applied = finite_array(
             _numpy(self.robot.data.applied_thrust), (1, len(self.thruster_names)), "native applied thrust"
         )[0][self._canonical_to_native]
+        if np.any(self._last_offsets):
+            applied = self._wind_thrust(self._last_offsets)
+        speeds = np.asarray(motors["motor_speed_rps"], dtype=float)
         motor_wrench = Wrench.from_vector(self.allocation_matrix_b @ applied)
         return {
             "mass_kg": self._mass.mass_kg,
@@ -871,7 +894,13 @@ class ARLBackend:
             "receives only explicit external disturbance",
             "commanded_thrust_n": self._last_command.tolist(),
             "applied_thrust_n": applied.tolist(),
-            "applied_thrust_source": "sampled_kf_times_direct_integrated_rps_squared_applied_to_individual_prop_bodies",
+            "applied_thrust_source": (
+                "sampled_kf_times_(direct_integrated_rps_plus_wind_rotor_speed_offset)_squared_"
+                "applied_to_individual_prop_bodies"
+            ),
+            "rotor_speed_offset_rps": self._last_offsets.tolist(),
+            "rotor_speed_effective_rps": np.maximum(speeds + self._last_offsets, 0.0).tolist(),
+            "rotor_speed_offset_source": "wind_axial_component_as_equivalent_rotor_speed_added_after_the_motor_model",
             "motor_wrench_b": motor_wrench.vector.tolist(),
             "motor_wrench_source": (
                 "diagnostic_sum_of_individual_propeller_forces_and_moments_about_vehicle_com_not_applied_to_root"

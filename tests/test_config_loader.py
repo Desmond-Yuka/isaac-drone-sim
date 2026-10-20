@@ -25,7 +25,9 @@ def test_merge_recurses_replaces_lists_and_switches_kind_wholesale():
 def test_helix_config_extends_base_and_only_states_differences():
     base, helix = load_config(DEFAULT_CONFIG), load_config(HELIX_CONFIG)
     assert helix["scene"] == base["scene"] and helix["effects"]["ou_wrench"]["start_time_s"] == 2.0
-    helix["effects"]["ou_wrench"]["start_time_s"] = base["effects"]["ou_wrench"]["start_time_s"]
+    assert helix["effects"]["wind"]["start_time_s"] == 2.0  # disturbances start after the spin-up
+    for name in ("ou_wrench", "wind"):
+        helix["effects"][name]["start_time_s"] = base["effects"][name]["start_time_s"]
     assert helix["effects"] == base["effects"]
     assert helix["controller"]["attitude_kp"] == base["controller"]["attitude_kp"]
     assert helix["controller"]["position_kp"] == [20.0, 20.0, 16.0]

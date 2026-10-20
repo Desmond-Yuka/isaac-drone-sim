@@ -484,7 +484,8 @@ BASIC_FIELDS = (
         "N",
         "along each configured rotor thrust axis",
         _MOTOR_START,
-        "This interval's native motor/thruster applied thrust state",
+        "Thrust applied to each prop body this interval: the native motor state, or k_f * (rps + wind offset)^2 "
+        "with wind on the rotors",
         "Fixed BL, BR, FL, FR order; unavailable values remain blank rather than copied from commands.",
         _ROTORS,
     ),
@@ -496,7 +497,7 @@ BASIC_FIELDS = (
         "along each configured rotor thrust axis",
         _MOTOR_START,
         "motor_thrust_command_n - motor_thrust_applied_n",
-        "Per-rotor thrust shortfall caused by motor dynamics.",
+        "Per-rotor thrust shortfall caused by motor dynamics and, if configured, wind on the rotors.",
         _ROTORS,
     ),
 )
@@ -619,16 +620,166 @@ def _wrench_fields():
     return tuple(fields)
 
 
-BASIC_FIELDS += _wrench_fields() + (
-    _scalar(
-        "motor_speed_source",
-        "text",
-        _MOTOR_START,
-        "Backend supplied provenance string",
-        "Identifies the native state/configured coefficient used to infer speeds; never labels inferred values as "
-        "encoder measurements.",
-        dtype="string",
-    ),
+_EFFECTS = "EffectsPipeline state used for the physics interval beginning at step_start_time_s"
+
+
+def _effect_fields():
+    """Wind, wind-on-rotor and OU-wrench signals; blank when that model is not configured."""
+    return (
+        _vector(
+            "wind_w_m_s",
+            "wind_w",
+            "m_s",
+            "m/s",
+            "world",
+            _START,
+            _EFFECTS,
+            "Air velocity at the CoM: mean + gradient + gusts + OU turbulence; zero outside the wind window.",
+        ),
+        _vector(
+            "wind_mean_w_m_s",
+            "wind_mean_w",
+            "m_s",
+            "m/s",
+            "world",
+            _START,
+            _EFFECTS,
+            "Deterministic part of wind_w_m_s: configured mean, gradient and gust pulses.",
+        ),
+        _vector(
+            "wind_turbulence_w_m_s",
+            "wind_turbulence_w",
+            "m_s",
+            "m/s",
+            "world",
+            _START,
+            _EFFECTS,
+            "OU turbulence part of wind_w_m_s.",
+        ),
+        _scalar("wind_speed_m_s", "m/s", _START, "Euclidean norm of wind_w_m_s", "Wind speed at the CoM."),
+        _vector(
+            "rotor_axial_wind_m_s",
+            "rotor_axial_wind",
+            "m_s",
+            "m/s",
+            "along each rotor thrust axis",
+            _START,
+            _EFFECTS,
+            "Wind component along each rotor's thrust axis at that rotor; positive is an updraft through the disk.",
+            _ROTORS,
+        ),
+        _vector(
+            "rotor_speed_offset_rps",
+            "rotor_speed_offset",
+            "rps",
+            "rev/s",
+            "rotor magnitude",
+            _START,
+            _EFFECTS,
+            "Wind's equivalent rotor-speed offset added after the motor model: c/2 * hover speed * axial wind.",
+            _ROTORS,
+        ),
+        _vector(
+            "rotor_speed_offset_rpm",
+            "rotor_speed_offset",
+            "rpm",
+            "rev/min",
+            "rotor magnitude",
+            _START,
+            "rotor_speed_offset_rps * 60",
+            "Equivalent rotor-speed offset in rev/min.",
+            _ROTORS,
+        ),
+        _vector(
+            "rotor_speed_effective_rps",
+            "rotor_speed_effective",
+            "rps",
+            "rev/s",
+            "rotor magnitude",
+            _MOTOR_START,
+            "motor_speed_rps + rotor_speed_offset_rps, not below zero",
+            "Equivalent speed whose k_f * speed^2 is the thrust applied with wind on the rotors; not a motor state.",
+            _ROTORS,
+        ),
+        _vector(
+            "rotor_speed_effective_rpm",
+            "rotor_speed_effective",
+            "rpm",
+            "rev/min",
+            "rotor magnitude",
+            _MOTOR_START,
+            "rotor_speed_effective_rps * 60",
+            "Equivalent rotor speed with wind in rev/min.",
+            _ROTORS,
+        ),
+        _vector(
+            "force_wind_drag_b_n",
+            "force_wind_drag_b",
+            "n",
+            "N",
+            "body at step_start_time_s",
+            _START,
+            _EFFECTS,
+            "In-plane rotor-disk wind drag applied at the CoM; included in force_disturbance_b_n.",
+        ),
+        _vector(
+            "force_ou_w_n",
+            "force_ou_w",
+            "n",
+            "N",
+            "world",
+            _START,
+            _EFFECTS,
+            "OU random force at the CoM as applied (mean + OU); zero outside its window. Included in the disturbance.",
+        ),
+        _vector(
+            "force_ou_mean_w_n",
+            "force_ou_mean_w",
+            "n",
+            "N",
+            "world",
+            _START,
+            _EFFECTS,
+            "Configured OU force mean; zero outside its window.",
+        ),
+        _vector(
+            "torque_ou_b_nm",
+            "torque_ou_b",
+            "nm",
+            "N m",
+            "body at step_start_time_s",
+            _START,
+            _EFFECTS,
+            "OU random torque as applied (mean + OU); zero outside its window. Included in the disturbance.",
+        ),
+        _vector(
+            "torque_ou_mean_b_nm",
+            "torque_ou_mean_b",
+            "nm",
+            "N m",
+            "body at step_start_time_s",
+            _START,
+            _EFFECTS,
+            "Configured OU torque mean; zero outside its window.",
+        ),
+    )
+
+
+BASIC_FIELDS += (
+    _wrench_fields()
+    + (
+        _scalar(
+            "motor_speed_source",
+            "text",
+            _MOTOR_START,
+            "Backend supplied provenance string",
+            "Identifies the native state/configured coefficient used to infer speeds; never labels inferred values as "
+            "encoder measurements.",
+            dtype="string",
+        ),
+    )
+    # Appended after the original columns, so existing column positions are unchanged.
+    + _effect_fields()
 )
 BASIC_CSV_COLUMNS = tuple(column for field in BASIC_FIELDS for column in field.columns)
 _BASIC_NAMES = frozenset(field.name for field in BASIC_FIELDS)

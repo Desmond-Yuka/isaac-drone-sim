@@ -9,6 +9,7 @@
 | `configs/arl_robot_1.yaml` | 基础配置：仿真、机型、推进器、场景、日志、录制、默认几何控制器、空中初态定点悬停（hold） |
 | `configs/helix.yaml` | 继承基础配置：地面零转速起飞 + 最短时间 helix，完成判据 |
 | `configs/helix_moderate.yaml` | 继承 helix：同一几何、固定时长（约 3.3 m/s 峰值）的慢速版，给反馈留余量 |
+| `configs/helix_rotor_wind.yaml` | 继承 helix：关掉质心 OU 力，改用世界系风场作用到旋翼（只在 x 轴随机的 OU 示例，系数为注明来源的名义值） |
 
 子文件用 `extends: <相对路径>` 继承父文件，只写差异：
 
@@ -44,11 +45,44 @@ python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
 | `allocation` | 有界加权分配的权重和正则化 |
 | `trajectory` | `kind` + 该轨迹的参数（见第 5 节） |
 | `completion` | 终点悬停完成判据；`null` 表示不设判据（跑完所有步即成功） |
-| `effects` | 常值外力/力矩、`ou_wrench` 随机外扰（力世界系、力矩机体系，均值 + 逐轴标准差 + 相关时间）、风、气动阻力；`ou_wrench` 默认开启（力均值 [1,0,0] N、各轴标准差 0.5 N、τ=1 s；`helix.yaml` 从起转结束 2 s 起作用），其余默认关闭 |
+| `effects` | 常值外力/力矩、`ou_wrench` 随机外扰（力世界系、力矩机体系，均值 + 逐轴标准差 + 相关时间）、风场 `wind`、风作用到旋翼 `rotor_wind`、气动阻力；`ou_wrench` 默认开启（力均值 [1,0,0] N、各轴标准差 0.5 N、τ=1 s；`helix.yaml` 从起转结束 2 s 起作用），其余默认关闭。风场与风作用到旋翼见下文 |
 | `model_mismatch` | 对象实际值 / 控制器标称值之比：`mass_ratio`、`inertia_ratio`、`thrust_coefficient_ratio`、`reaction_torque_ratio`；全为 1 时无失配，默认全为 1（关闭） |
 | `scene` / `logging` | 地面与灯光；日志目录、运行目录名里的实验名 `run_name`（`null` = YAML 文件名，目录名规则见 README「运行目录」）、记录间隔、刷新间隔 |
 
 `vehicle.launch.spin_up_s`：起转阶段参考保持起点，电机指令乘以 0→1 的平滑包络；轨迹在起转结束时刻才开始。地面起飞必须 > 0。地面起飞时轨迹锚定在后端真值（物理放置位置）；空中起始锚定在控制器看到的状态（可以是估计器输出）。
+
+### 风场与风作用到旋翼（`effects.wind`、`effects.rotor_wind`）
+
+`wind` 生成世界系风速（m/s，写的是空气往哪走），`rotor_wind` 再按机体系把它分成两路作用到飞机上。两者默认关闭。
+
+风场 = 平均风 `velocity_w_m_s` + 阵风 `gusts` + OU 湍流 `turbulence`（另可加线性梯度 `spatial_gradient_per_s`）：
+
+- **时间窗** `start_time_s` / `end_time_s`：窗口外是静风，到 `start_time_s` 时风直接以满强度出现。OU 在复位时就按平稳分布取值，之后每个物理步都在演化，所以开窗那一刻湍流已经是满强度，不会从 0 慢慢长起来。`helix.yaml` 设为 2 s，即起转结束时。
+- **湍流** `turbulence.mode`：
+  - `axes`（默认）：每个世界轴一个独立 OU，`time_constant_s`、`stationary_std_w_m_s` 各写 3 个数。只随机一个轴，就把另外两个轴的标准差设为 0。
+  - `direction`：沿 `direction_w`（自动归一化）的单个 OU，`time_constant_s`、`stationary_std_w_m_s` 各写 1 个数。`[1, 0, 0]`、`[0, 1, 0]`、`[0, 0, 1]` 就是单轴，`[1, 1, 0]` 是水平 45°。
+- **阵风** `gusts`：每项写 `start_time_s`、`duration_s`、`delta_velocity_w_m_s`、`shape`。`one_minus_cosine`（默认）平滑升起再回落；`step` 在 `start_time_s` 瞬间出现，到时瞬间消失，`duration_s: null` 表示一直持续到结束。
+
+风作用到旋翼（`rotor_wind`，需要 `wind.enabled`）按机体系分工，两路各有开关：
+
+- **沿桨轴**（`axial`）：把每个桨处的风转到机体系，取沿桨轴的分量 `u_axial,i`（上升气流为正），换算成等效转速偏移 `δΩ_i = c/2 · Ω_hover,i · u_axial,i`，在电机模型之后叠加：推力和反扭矩按 `k_f·(Ω_i + δΩ_i)²` 计算，电机状态本身不变。`c` 即 `thrust_gain_per_m_s`，是悬停时每 1 m/s 轴向风使每桨推力变化的比例，BEMT 线性化给出 `c = κ / v_h`；`Ω_hover,i` 是四桨均分重量时第 i 个桨的转速。偏移与当前转速无关，所以推力变化与转速成正比，而不是与推力成正比。
+- **桨盘平面内**（`inplane_drag`）：转速产生不了水平力，这部分作为阻力 `k · u_inplane` 加在质心、顺着风，`k` 即 `drag_n_per_m_s`。
+- 只算风本身，不算飞机自身运动带来的相对气流，所以静风时结果与不开风完全一样。线性模型在总风速约 3 m/s（约为悬停下洗速度的一半）以内可靠。
+- 系数没有默认值，必须显式填写并注明来源；`configs/helix_rotor_wind.yaml` 给出名义值及其推导来源。
+
+旧的质心 OU 力 `ou_wrench` 保留不变，可作对照组。
+
+```bash
+# 只在 z 轴随机的风，其余同 helix_rotor_wind.yaml
+python -m isaac_drone run --backend synthetic --config configs/helix_rotor_wind.yaml \
+    --set 'effects.wind.turbulence.direction_w=[0,0,1]'
+# 沿同一方向扫风速标准差和种子
+python -m isaac_drone sweep --config configs/helix_rotor_wind.yaml \
+    --grid 'effects.wind.turbulence.stationary_std_w_m_s=[0.5,1.0,1.5,2.0]' --grid 'simulation.seed=[0,1,2,3,4]'
+# 6 s 时突然出现 2 m/s 的下沉气流，持续 2 s
+python -m isaac_drone run --backend synthetic --config configs/helix_rotor_wind.yaml \
+    --set 'effects.wind.gusts=[{start_time_s: 6.0, duration_s: 2.0, delta_velocity_w_m_s: [0, 0, -2], shape: step}]'
+```
 
 ## 4. 控制器
 

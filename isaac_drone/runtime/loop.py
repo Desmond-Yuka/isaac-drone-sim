@@ -17,7 +17,7 @@ from isaac_drone.control import BoundedAllocator, FlightLimits, VehicleModel, bu
 from isaac_drone.control.allocation import AllocationResult
 from isaac_drone.core.types import MassProperties, Wrench
 from isaac_drone.core.validation import finite_array
-from isaac_drone.effects import build_effects
+from isaac_drone.effects import RotorGeometry, build_effects
 from isaac_drone.sim.actuation import thrust_to_motor_speeds
 from isaac_drone.telemetry.measurements import build_basic_record
 from isaac_drone.trajectories import SegmentedTrajectory, build_trajectory
@@ -38,7 +38,9 @@ class MotionControlLoop:
     geometry divided by the ``model_mismatch`` plant/model ratios (Kidambi,
     IEEE Access 2025, Sec. II-C); an injected ``controller`` instance is reset
     instead. The rotor gyroscopic torque (arXiv 2609.12188 eq. 7) is added to
-    the external wrench when ``vehicle.rotor_inertia_kg_m2`` is set. During the launch spin-up
+    the external wrench when ``vehicle.rotor_inertia_kg_m2`` is set. Wind on the
+    rotors (``effects.rotor_wind``) gets the plant's rotor geometry at reset and
+    passes per-rotor speed offsets to the backend. During the launch spin-up
     (``vehicle.launch.spin_up_s``) the reference holds the start pose and motor
     commands are scaled by a smooth 0..1 envelope; the trajectory starts after it.
     """
@@ -82,6 +84,17 @@ class MotionControlLoop:
             "rps_max": parameters["rps_max"],
             "current_rps": finite_array(parameters["current_rps"], (4,), "current motor rps"),
         }
+
+    def _rotor_geometry(self) -> RotorGeometry:
+        """The plant's actual rotor layout and equal-share hover speeds, for wind on the rotors."""
+        positions = getattr(self.backend, "rotor_positions_b", None)
+        if positions is None:
+            raise ValueError("effects.rotor_wind needs a backend that reports rotor_positions_b")
+        truth = self.backend.mass_properties()
+        kf = finite_array(self.backend.motor_parameters()["sampled_kf"], (4,), "sampled kf")
+        weight_n = truth.mass_kg * abs(float(self.config["simulation"]["gravity"][2]))
+        axes = np.asarray(self.backend.allocation_matrix_b, dtype=float)[:3].T
+        return RotorGeometry(positions, truth.com_b, axes, np.sqrt(weight_n / 4.0 / kf))
 
     def _gyroscopic_torque(self, truth, current_rps) -> Wrench:
         if self.rotor_inertia is None:
@@ -134,6 +147,8 @@ class MotionControlLoop:
         self._requested_wrench = Wrench.zero()
         self._requested_thrust = None
         self.effects.reset(self.config["simulation"]["seed"])
+        if getattr(self.effects, "needs_rotor_geometry", False):
+            self.effects.bind_rotor_geometry(self._rotor_geometry())
         # A ground launch anchors the reference at the physical placement (backend truth); an
         # airborne start anchors it at the state the controller observes (possibly an estimate).
         anchor = self.backend if launch["from_ground"] else self.state_provider
@@ -293,8 +308,15 @@ class MotionControlLoop:
             )
         )
         external = self.effects.evaluate(truth, self.dt_s)
+        offsets_method = getattr(self.effects, "rotor_speed_offsets", None)
+        offsets = None if offsets_method is None else offsets_method(truth)
+        diagnostics_method = getattr(self.effects, "diagnostics", None)
+        effects_diagnostics = {} if diagnostics_method is None else diagnostics_method(truth)
         gyroscopic = self._gyroscopic_torque(truth, motor_parameters["current_rps"])
-        self.backend.apply_motor_speeds(target_rps, external + gyroscopic)
+        if offsets is None:
+            self.backend.apply_motor_speeds(target_rps, external + gyroscopic)
+        else:
+            self.backend.apply_motor_speeds(target_rps, external + gyroscopic, rotor_speed_offset_rps=offsets)
         self._previous_thrust = effective_thrust.copy()
         self._pending = True
         self._record = {
@@ -315,6 +337,8 @@ class MotionControlLoop:
             "allocation_saturated": allocation.saturated,
             "external_wrench_b": external.vector,
             "gyroscopic_torque_b_nm": gyroscopic.torque_b,
+            "rotor_speed_offset_rps": offsets,
+            "effects": effects_diagnostics,
         }
         return deepcopy(self._record)
 
@@ -358,6 +382,8 @@ class MotionControlLoop:
             desired_rotation_w=self._interval_diagnostics.desired_rotation_w,
             desired_angular_velocity_d=self._interval_diagnostics.desired_angular_velocity_d,
             motor_command_rps=self._record["motor_command_rps"],
+            effects=self._record["effects"],
+            rotor_speed_offset_rps=self._record["rotor_speed_offset_rps"],
         )
         self._pending = False
         return deepcopy(self._record)

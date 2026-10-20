@@ -20,6 +20,11 @@ class VehicleBackend(Protocol):
     ``allocation_matrix_b`` (6x4) maps rotor thrusts [N] to the body wrench about
     the actual CoM. Optional: ``ground_start_position(ground_z_m, clearance_m)``
     for ground launches, ``assert_control_compatible()`` and ``describe()``.
+    Wind on the rotors needs ``rotor_positions_b`` (4x3, rotor thrust points
+    relative to the root link) and the ``rotor_speed_offset_rps`` argument of
+    ``apply_motor_speeds``: equivalent per-rotor speed offsets added after the
+    motor model, so each rotor's thrust and reaction torque follow
+    k_f (rps + offset)^2 while the motor state itself is unchanged.
     """
 
     allocation_matrix_b: np.ndarray
@@ -34,7 +39,9 @@ class VehicleBackend(Protocol):
 
     def thrust_to_motor_speeds(self, thrusts_n: np.ndarray) -> np.ndarray: ...
 
-    def apply_motor_speeds(self, target_rps: np.ndarray, external_wrench: Wrench) -> None: ...
+    def apply_motor_speeds(
+        self, target_rps: np.ndarray, external_wrench: Wrench, rotor_speed_offset_rps: np.ndarray | None = None
+    ) -> None: ...
 
     def telemetry(self) -> dict: ...
 

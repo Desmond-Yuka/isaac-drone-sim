@@ -42,6 +42,22 @@ def test_motor_model_off_by_default_reaches_the_command_in_the_same_step():
     np.testing.assert_allclose(plant.native.curr_thrust, plant.native.thrust_const * 400.0**2)
 
 
+def test_rotor_speed_offsets_change_thrust_after_the_motor_model():
+    plant = make_plant()
+    offsets = np.array([10.0, -10.0, 0.0, 5.0])
+    plant.apply_motor_speeds(np.full(4, 400.0), Wrench.zero(), rotor_speed_offset_rps=offsets)
+    np.testing.assert_allclose(plant.motor.rps[0], 400.0)  # the motor state itself is unchanged
+    expected = plant.native.thrust_const[0] * (400.0 + offsets) ** 2
+    telemetry = plant.telemetry()
+    np.testing.assert_allclose(telemetry["applied_thrust_n"], expected)
+    np.testing.assert_allclose(telemetry["rotor_speed_effective_rps"], 400.0 + offsets)
+    np.testing.assert_allclose(telemetry["rotor_speed_offset_rps"], offsets)
+    np.testing.assert_allclose(telemetry["motor_wrench_b"], plant.allocation_matrix_b @ expected)
+    np.testing.assert_allclose(plant.submitted.vector, plant.allocation_matrix_b @ expected)
+    with pytest.raises(ValueError):
+        make_plant().apply_motor_speeds(np.full(4, 400.0), Wrench.zero(), rotor_speed_offset_rps=[1.0, 2.0])
+
+
 def test_zero_motors_fall_to_contact_and_cannot_follow_target():
     plant = make_plant()
     original_xy = plant.position[:2].copy()

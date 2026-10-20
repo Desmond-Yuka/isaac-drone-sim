@@ -51,6 +51,7 @@ class OUWrench:
         self._rng = np.random.default_rng(seed)
         self._force = self.force_std * self._rng.normal(size=3)
         self._torque = self.torque_std * self._rng.normal(size=3)
+        self._last = {}
 
     def _advance(self, value, std, tau, dt_s):
         decay = np.exp(-dt_s / tau)
@@ -63,5 +64,14 @@ class OUWrench:
         self._force = self._advance(self._force, self.force_std, self.force_tau, dt_s)
         self._torque = self._advance(self._torque, self.torque_std, self.torque_tau, dt_s)
         if state.time_s < self.start or (self.end is not None and state.time_s >= self.end):
+            self._last = {key: np.zeros(3) for key in _DIAGNOSTICS}
             return Wrench.zero()
+        self._last = dict(zip(_DIAGNOSTICS, (force_w, self.force_mean.copy(), torque_b, self.torque_mean.copy())))
         return Wrench(force_b=body_to_world(state.quaternion_wxyz).T @ force_w, torque_b=torque_b)
+
+    def diagnostics(self) -> dict:
+        """Last step's applied force (world) and torque (body) with their means; zero outside the window."""
+        return {key: value.copy() for key, value in self._last.items()}
+
+
+_DIAGNOSTICS = ("force_ou_w_n", "force_ou_mean_w_n", "torque_ou_b_nm", "torque_ou_mean_b_nm")

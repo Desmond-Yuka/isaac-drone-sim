@@ -19,6 +19,7 @@ import numpy as np
 
 from isaac_drone.core.rotations import quaternion_to_matrix
 from isaac_drone.core.types import MassProperties, VehicleState, Wrench
+from isaac_drone.core.validation import finite_array
 from isaac_drone.sim.actuation import NativeRpsActuator, thrust_to_motor_speeds
 from isaac_drone.sim.native_thruster import TRANSCRIBED_METHODS
 
@@ -85,6 +86,7 @@ class SyntheticBackend:
         self.mass = MassProperties(p.mass_kg, np.array(p.inertia_com_b_kg_m2), np.array(p.com_b_m))
         self.inv_inertia = np.linalg.inv(self.mass.inertia_com_b)
         origins = np.array(p.rotor_positions_b_m)
+        self.rotor_positions_b = origins.copy()
         axes = np.tile([0.0, 0.0, 1.0], (4, 1))
         reaction = p.torque_to_thrust_ratio_m * np.asarray(config["vehicle"]["rotor_directions"], dtype=float)
         moments = np.cross(origins - self.mass.com_b, axes) + reaction[:, None] * axes
@@ -115,6 +117,7 @@ class SyntheticBackend:
         self.quaternion = quaternion.copy()
         self.omega = rotation.T @ angular_velocity_w
         self.motor.reset(np.array([[initial["rps"][name] for name in self.names]]))
+        self.rotor_speed_offset = np.zeros(4)
         self.external = Wrench.zero()
         self.submitted = Wrench.zero()
         self.has_submitted = False
@@ -147,14 +150,30 @@ class SyntheticBackend:
         params = self.motor_parameters()
         return thrust_to_motor_speeds(thrust, params["sampled_kf"], params["thrust_min_n"], params["thrust_max_n"])
 
-    def apply_motor_speeds(self, targets, external):
+    def apply_motor_speeds(self, targets, external, rotor_speed_offset_rps=None):
         if self.motor_step_count != self.physics_step_count:
             raise RuntimeError("Motor input already prepared; advance physics once")
+        offsets = (
+            np.zeros(4)
+            if rotor_speed_offset_rps is None
+            else finite_array(rotor_speed_offset_rps, (4,), "rotor speed offset")
+        )
         self.motor.step(np.asarray(targets)[None, :])
+        self.rotor_speed_offset = offsets
         self.external = external
-        self.submitted = Wrench.from_vector(self.allocation_matrix_b @ self.native.curr_thrust[0] + external.vector)
+        self.submitted = Wrench.from_vector(self.allocation_matrix_b @ self._applied_thrust() + external.vector)
         self.has_submitted = True
         self.motor_step_count += 1
+
+    def _effective_rps(self):
+        """Motor speed plus the wind's equivalent offset; a rotor cannot spin backwards."""
+        return np.maximum(self.motor.rps[0] + self.rotor_speed_offset, 0.0)
+
+    def _applied_thrust(self):
+        """Thrust on each rotor: the motor state, or k_f (rps + offset)^2 under wind on the rotors."""
+        if not np.any(self.rotor_speed_offset):
+            return self.native.curr_thrust[0]
+        return self.native.thrust_const[0] * self._effective_rps() ** 2
 
     def _derivative(self, packed):
         q, omega = packed[6:10], packed[10:13]
@@ -192,13 +211,16 @@ class SyntheticBackend:
 
     def telemetry(self):
         speed = self.motor.rps[0].copy()
+        applied = self._applied_thrust().copy()
         return {
             "motor_speed_rps": speed,
             "motor_speed_rpm": speed * 60,
             "motor_speed_rad_s": speed * 2 * np.pi,
+            "rotor_speed_offset_rps": self.rotor_speed_offset.copy(),
+            "rotor_speed_effective_rps": self._effective_rps(),
             "commanded_thrust_n": self.native.thrust_const[0] * self.motor.target_rps[0] ** 2,
-            "applied_thrust_n": self.native.curr_thrust[0].copy(),
-            "motor_wrench_b": self.allocation_matrix_b @ self.native.curr_thrust[0],
+            "applied_thrust_n": applied,
+            "motor_wrench_b": self.allocation_matrix_b @ applied,
             "total_wrench_b": self.submitted.vector,
             "has_submitted_wrench": self.has_submitted,
             "motor_model_enabled": self.motor.dynamics,

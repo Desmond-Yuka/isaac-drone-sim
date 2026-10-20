@@ -3,10 +3,12 @@
 basic.csv and telemetry.jsonl stay the data of record; figures are a derived
 view and never write back to them. Each tracked quantity gets one figure: a
 row per component with the ideal (target or command) and the actual value,
-then a row with the ideal-minus-actual error. plot_comparison draws the same
-set with several runs overlaid. matplotlib is optional and
-imported only when drawing. The object API (no pyplot) needs no GUI backend,
-so this also runs headless and inside the Isaac Sim process.
+then a row with the ideal-minus-actual error. Disturbance figures (wind, wind
+on the rotors, OU force/torque) are drawn only for runs that recorded that
+model; their bottom row shows the random part instead of an error.
+plot_comparison draws the same set with several runs overlaid. matplotlib is
+optional and imported only when drawing. The object API (no pyplot) needs no
+GUI backend, so this also runs headless and inside the Isaac Sim process.
 """
 
 from __future__ import annotations
@@ -178,7 +180,12 @@ _TRACKING_FIGURES = (
             "motor_speed_command_{c}_rpm",
             "motor_speed_error_{c}_rpm",
         ),
-        {"ideal_label": "Command", "labels": _ROTOR_LABELS, "colors": _ROTOR_COLORS},
+        {
+            "ideal_label": "Command",
+            "labels": _ROTOR_LABELS,
+            "colors": _ROTOR_COLORS,
+            "extra": ("With wind (equivalent)", "rotor_speed_effective_{c}_rpm", _SOLVER),
+        },
     ),
     (
         "rotor_thrust.png",
@@ -222,11 +229,104 @@ _TRACKING_FIGURES = (
 )
 
 
+# (file name, gate column, positional and keyword arguments of _tracking) for each disturbance figure.
+# A figure is drawn only when some run has a nonzero value in its gate column: blank means the model was off.
+_DISTURBANCE_FIGURES = (
+    (
+        "wind.png",
+        "wind_w_{c}_m_s",
+        (
+            "Wind velocity at CoM (world frame)",
+            "m/s",
+            0.5,
+            _AXES,
+            "wind_w_{c}_m_s",
+            "wind_mean_w_{c}_m_s",
+            "wind_turbulence_w_{c}_m_s",
+        ),
+        {
+            "actual_label": "Wind",
+            "ideal_label": "Mean + gusts",
+            "error_label": "OU part",
+            "norm_label": "|OU part|",
+            "derived_norm": True,
+        },
+    ),
+    (
+        "rotor_wind.png",
+        "rotor_speed_offset_{c}_rpm",
+        (
+            "Rotor speed with wind on the rotors (equivalent speed, axial channel)",
+            "rpm",
+            100.0,
+            _ROTORS,
+            "rotor_speed_effective_{c}_rpm",
+            "motor_speed_{c}_rpm",
+            "rotor_speed_offset_{c}_rpm",
+        ),
+        {
+            "actual_label": "With wind (equivalent)",
+            "ideal_label": "Motor speed",
+            "error_label": "Wind offset",
+            "labels": _ROTOR_LABELS,
+            "colors": _ROTOR_COLORS,
+        },
+    ),
+    (
+        "wind_drag.png",
+        "force_wind_drag_b_{c}_n",
+        ("Rotor-disk in-plane wind drag at CoM (body frame)", "N", 0.2, _AXES, "force_wind_drag_b_{c}_n", None, None),
+        {"actual_label": "In-plane drag"},
+    ),
+    (
+        "ou_force.png",
+        "force_ou_w_{c}_n",
+        (
+            "OU random force at CoM (world frame)",
+            "N",
+            0.5,
+            _AXES,
+            "force_ou_w_{c}_n",
+            "force_ou_mean_w_{c}_n",
+            "force_ou_part_w_{c}_n",
+        ),
+        {
+            "actual_label": "OU force",
+            "ideal_label": "Mean",
+            "error_label": "OU part",
+            "norm_label": "|OU part|",
+            "derived_norm": True,
+        },
+    ),
+    (
+        "ou_torque.png",
+        "torque_ou_b_{c}_nm",
+        (
+            "OU random torque (body frame)",
+            "N·m",
+            0.02,
+            _AXES,
+            "torque_ou_b_{c}_nm",
+            "torque_ou_mean_b_{c}_nm",
+            "torque_ou_part_b_{c}_nm",
+        ),
+        {
+            "actual_label": "OU torque",
+            "ideal_label": "Mean",
+            "error_label": "OU part",
+            "norm_label": "|OU part|",
+            "derived_norm": True,
+        },
+    ),
+)
+
+
 def _load_run(run_dir):
     """basic.csv columns (with attitude angles) and the mission phase starts of one run."""
     run = Path(run_dir)
     data = load_basic_csv(run / "basic.csv")
     _add_attitude_angles(data)
+    _add_ou_parts(data)
     config, metadata = (
         json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
         for path in (run / "config.json", run / "metadata.json")
@@ -275,7 +375,31 @@ def _write_figures(runs, subtitle, phases, output):
     for name, arguments, options in _TRACKING_FIGURES:
         paths.append(output / name)
         _tracking(runs, subtitle, phases, *arguments, **options).savefig(paths[-1], dpi=150)
+    for name, gate, arguments, options in _DISTURBANCE_FIGURES:
+        if _recorded(runs, gate, arguments[3]):
+            paths.append(output / name)
+            _tracking(runs, subtitle, phases, *arguments, **options).savefig(paths[-1], dpi=150)
     return paths
+
+
+def _recorded(runs, pattern, components):
+    """True when some run has a nonzero value in one of these columns; blank or all-zero columns are skipped."""
+    for _, data in runs:
+        for component in components:
+            column = data.get(pattern.format(c=component))
+            if column is not None and np.any(np.isfinite(column) & (column != 0)):
+                return True
+    return False
+
+
+def _add_ou_parts(data):
+    """Random part (applied minus mean) of the OU force and torque, for their figures."""
+    for kind, frame, unit in (("force", "w", "n"), ("torque", "b", "nm")):
+        for axis in _AXES:
+            applied = data.get(f"{kind}_ou_{frame}_{axis}_{unit}")
+            mean = data.get(f"{kind}_ou_mean_{frame}_{axis}_{unit}")
+            if applied is not None and mean is not None:
+                data[f"{kind}_ou_part_{frame}_{axis}_{unit}"] = applied - mean
 
 
 def _add_attitude_angles(data):
@@ -338,12 +462,22 @@ def _tracking(
     actual_label="Actual",
     ideal_label="Target",
     extra=None,
+    error_label="Error",
+    derived_norm=False,
 ):
-    """One row per component (actual and ideal), then one row of ideal-minus-actual errors per run."""
+    """One row per component (actual and ideal), then one row of ideal-minus-actual errors per run.
+
+    ``ideal`` or ``error`` None leaves out that line or the error rows. ``error_label``
+    names the bottom rows when they hold another quantity (the random part of a
+    disturbance); ``derived_norm`` adds the magnitude of those rows' components.
+    """
     single = len(runs) == 1
     labels = labels or components
-    figure, axes = _time_figure(len(components) + len(runs), title, subtitle)
-    ideals = [[data["sample_time_s"]] + [data.get(ideal.format(c=c)) for c in components] for _, data in runs]
+    figure, axes = _time_figure(len(components) + (len(runs) if error else 0), title, subtitle)
+    ideals = [
+        [data["sample_time_s"]] + [data.get(ideal.format(c=c)) if ideal else None for c in components]
+        for _, data in runs
+    ]
     shared = all(_same(ideals[0], other) for other in ideals[1:])
     for row, (ax, component, label) in enumerate(zip(axes, components, labels)):
         for index, (name, data) in enumerate(runs):
@@ -366,8 +500,23 @@ def _tracking(
         ax.set_ylabel(f"{label} [{unit}]")
     error_axes = axes[len(components) :]
     for ax, (name, data) in zip(error_axes, runs):
-        _error_row(ax, data, components, labels, colors, actual, ideal, error, norm, norm_label, euclidean, scale, unit)
-        ax.set_ylabel(f"Error [{unit}]" if single else f"{name} error [{unit}]")
+        _error_row(
+            ax,
+            data,
+            components,
+            labels,
+            colors,
+            actual,
+            ideal,
+            error,
+            norm,
+            norm_label,
+            euclidean,
+            scale,
+            unit,
+            derived_norm,
+        )
+        ax.set_ylabel(f"{error_label} [{unit}]" if single else f"{name} {error_label.lower()} [{unit}]")
     if not single:
         lows, highs = zip(*(ax.get_ylim() for ax in error_axes))
         for ax in error_axes:
@@ -386,13 +535,16 @@ def _same(first, second):
     )
 
 
-def _error_row(ax, data, components, labels, colors, actual, ideal, error, norm, norm_label, euclidean, scale, unit):
+def _error_row(
+    ax, data, components, labels, colors, actual, ideal, error, norm, norm_label, euclidean, scale, unit, derived_norm
+):
     """One run's ideal-minus-actual error per component, plus its magnitude with max and RMS."""
     t = data["sample_time_s"]
     errors = []
     for component, label, color in zip(components, labels, colors):
         difference = data.get(error.format(c=component))
-        actual_values, ideal_values = data.get(actual.format(c=component)), data.get(ideal.format(c=component))
+        actual_values = data.get(actual.format(c=component))
+        ideal_values = data.get(ideal.format(c=component)) if ideal else None
         if difference is None and actual_values is not None and ideal_values is not None:
             difference = ideal_values - actual_values  # runs recorded before error columns existed
         errors.append(difference)
@@ -405,7 +557,7 @@ def _error_row(ax, data, components, labels, colors, actual, ideal, error, norm,
             linewidth=1.0,
         )
     magnitude = data.get(norm) if norm else None
-    if magnitude is None and norm and euclidean and all(e is not None for e in errors):
+    if magnitude is None and (norm or derived_norm) and euclidean and all(e is not None for e in errors):
         magnitude = np.sqrt(sum(e**2 for e in errors))
     if magnitude is not None and np.isfinite(magnitude).any():
         finite = magnitude[np.isfinite(magnitude)] * scale

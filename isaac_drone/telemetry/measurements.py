@@ -37,6 +37,38 @@ def _norm(vector):
     return None if vector is None else float(np.linalg.norm(vector))
 
 
+def _effect_fields(effects, rotor_speed_offset_rps, motor_speed, backend_telemetry) -> dict:
+    """Wind, rotor-wind and OU-wrench signals of this interval; None where the model is not configured."""
+    effects = {} if effects is None else effects
+    if not isinstance(effects, Mapping):
+        raise TypeError("effects diagnostics must be a mapping")
+    wind = _optional_vector(effects, "wind_w_m_s", 3)
+    offset = (
+        None if rotor_speed_offset_rps is None else finite_array(rotor_speed_offset_rps, (4,), "rotor_speed_offset_rps")
+    )
+    effective = None
+    if offset is not None:
+        effective = _optional_vector(backend_telemetry, "rotor_speed_effective_rps", 4)
+        if effective is None and motor_speed is not None:
+            effective = np.maximum(motor_speed + offset, 0.0)
+    return {
+        "wind_w_m_s": wind,
+        "wind_mean_w_m_s": _optional_vector(effects, "wind_mean_w_m_s", 3),
+        "wind_turbulence_w_m_s": _optional_vector(effects, "wind_turbulence_w_m_s", 3),
+        "wind_speed_m_s": _norm(wind),
+        "rotor_axial_wind_m_s": _optional_vector(effects, "rotor_axial_wind_m_s", 4),
+        "rotor_speed_offset_rps": offset,
+        "rotor_speed_offset_rpm": None if offset is None else offset * 60.0,
+        "rotor_speed_effective_rps": effective,
+        "rotor_speed_effective_rpm": None if effective is None else effective * 60.0,
+        "force_wind_drag_b_n": _optional_vector(effects, "force_wind_drag_b_n", 3),
+        "force_ou_w_n": _optional_vector(effects, "force_ou_w_n", 3),
+        "force_ou_mean_w_n": _optional_vector(effects, "force_ou_mean_w_n", 3),
+        "torque_ou_b_nm": _optional_vector(effects, "torque_ou_b_nm", 3),
+        "torque_ou_mean_b_nm": _optional_vector(effects, "torque_ou_mean_b_nm", 3),
+    }
+
+
 def build_basic_record(
     before: VehicleState,
     after: VehicleState,
@@ -51,8 +83,15 @@ def build_basic_record(
     desired_rotation_w=None,
     desired_angular_velocity_d=None,
     motor_command_rps=None,
+    effects=None,
+    rotor_speed_offset_rps=None,
 ) -> dict:
     """Build one completed-physics-interval record in explicit SI units.
+
+    ``effects`` holds the EffectsPipeline diagnostics of this interval (wind at
+    the CoM and its parts, the rotor-wind drag and axial wind, the OU force and
+    torque); ``rotor_speed_offset_rps`` the wind's equivalent rotor-speed
+    offsets. Fields of models that are not configured stay None.
 
     Position, velocity and motor speed are actual simulation quantities. The
     target is the control reference held over this interval, sampled at
@@ -189,6 +228,7 @@ def build_basic_record(
         "torque_error_b_nm": torque_error,
         "torque_error_norm_nm": _norm(torque_error),
     }
+    result.update(_effect_fields(effects, rotor_speed_offset_rps, motor_speed, backend_telemetry))
     for key, value in result.items():
         if isinstance(value, np.ndarray) and not np.isfinite(value).all():
             raise FloatingPointError(f"Non-finite derived flight signal: {key}")

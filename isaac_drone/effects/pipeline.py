@@ -2,7 +2,9 @@
 
 Physics gravity, contacts and rotor forces belong to the backend, and must not
 be duplicated here. All returned wrenches use body axes about the current CoM.
-A disabled model is absent, not a declaration of physically negligible effects.
+Wind on the rotors additionally yields per-rotor speed offsets, which the
+backend applies after its motor model. A disabled model is absent, not a
+declaration of physically negligible effects.
 """
 
 from __future__ import annotations
@@ -16,8 +18,9 @@ from isaac_drone.core.types import VehicleState, Wrench
 from isaac_drone.effects._math import body_to_world, dissipative_matrix, finite_scalar, positive_dt
 from isaac_drone.effects._math import numeric_array as finite_array
 from isaac_drone.effects.drag import BodyDrag
+from isaac_drone.effects.rotor_wind import RotorGeometry, RotorWind
 from isaac_drone.effects.stochastic import OUWrench
-from isaac_drone.effects.wind import Gust, UniformGustWind, WindField
+from isaac_drone.effects.wind import GUST_SHAPES, Gust, UniformGustWind, WindField
 
 
 class EffectModel(Protocol):
@@ -123,6 +126,49 @@ class EffectsPipeline:
         self._last_time_s = state.time_s
         return wrench
 
+    @property
+    def needs_rotor_geometry(self) -> bool:
+        """True when an effect acts on individual rotors and needs the plant's rotor layout."""
+        return any(hasattr(effect, "bind_rotor_geometry") for effect in self.effects)
+
+    def bind_rotor_geometry(self, geometry: RotorGeometry) -> None:
+        for effect in self.effects:
+            if hasattr(effect, "bind_rotor_geometry"):
+                effect.bind_rotor_geometry(geometry)
+
+    def rotor_speed_offsets(self, state: VehicleState) -> np.ndarray | None:
+        """Summed per-rotor speed offsets [rev/s] for the step just evaluated, None when no effect has any."""
+        if self._last_time_s is None or state.time_s != self._last_time_s:
+            raise ValueError("evaluate the effects for this physics step before the rotor offsets")
+        total = None
+        for effect in self.effects:
+            method = getattr(effect, "rotor_speed_offsets", None)
+            offsets = None if method is None else method(state, self.wind)
+            if offsets is not None:
+                offsets = finite_array(offsets, (4,), "rotor speed offsets")
+                total = offsets if total is None else total + offsets
+        return total
+
+    def diagnostics(self, state: VehicleState) -> dict:
+        """Telemetry for the step just evaluated: wind at the CoM split into its parts, plus each effect's own."""
+        if self._last_time_s is None or state.time_s != self._last_time_s:
+            raise ValueError("evaluate the effects for this physics step before reading diagnostics")
+        result = {}
+        if self.wind is not None:
+            components = getattr(self.wind, "components_w", None)
+            if components is None:
+                result["wind_w_m_s"] = finite_array(self.wind.velocity_w(state.position_w, state.time_s), (3,), "wind")
+            else:
+                deterministic, turbulence = components(state.position_w, state.time_s)
+                result["wind_mean_w_m_s"] = deterministic
+                result["wind_turbulence_w_m_s"] = turbulence
+                result["wind_w_m_s"] = deterministic + turbulence
+        for effect in self.effects:
+            method = getattr(effect, "diagnostics", None)
+            if method is not None:
+                result.update(method())
+        return result
+
 
 def _section(value, name: str) -> Mapping:
     if not isinstance(value, Mapping):
@@ -160,6 +206,30 @@ def _optional_time(config: Mapping, key: str, *, positive=False) -> None:
             raise ValueError(f"{key} must be {'positive' if positive else 'nonnegative'}")
 
 
+_WIND_KEYS = {
+    "enabled",
+    "model",
+    "velocity_w_m_s",
+    "spatial_gradient_per_s",
+    "reference_position_w_m",
+    "start_time_s",
+    "end_time_s",
+    "gusts",
+    "turbulence",
+}
+_GUST_KEYS = {"start_time_s", "duration_s", "delta_velocity_w_m_s", "shape"}
+_TURBULENCE_KEYS = {"enabled", "mode", "direction_w", "time_constant_s", "stationary_std_w_m_s"}
+_TURBULENCE_MODES = ("axes", "direction")
+
+
+def _turbulence_mode(turbulence: Mapping) -> str:
+    """``axes`` (one OU per world axis, the default) or ``direction`` (one OU along direction_w)."""
+    mode = turbulence.get("mode") or "axes"
+    if mode not in _TURBULENCE_MODES:
+        raise ValueError("turbulence.mode must be axes or direction")
+    return mode
+
+
 def _validate_optional_wind(config: Mapping) -> None:
     # Even disabled settings remain structurally checked, while None retains its
     # meaning of unidentified. This catches dormant typos before later enabling.
@@ -168,25 +238,84 @@ def _validate_optional_wind(config: Mapping) -> None:
     for key in ("velocity_w_m_s", "reference_position_w_m"):
         _optional_array(config, key, (3,))
     _optional_array(config, "spatial_gradient_per_s", (3, 3))
+    for key in ("start_time_s", "end_time_s"):
+        _optional_time(config, key)
+    if (
+        config.get("start_time_s") is not None
+        and config.get("end_time_s") is not None
+        and config["end_time_s"] <= config["start_time_s"]
+    ):
+        raise ValueError("wind.end_time_s must exceed start_time_s")
     if config.get("gusts") is not None:
         if not isinstance(config["gusts"], (list, tuple)):
             raise ValueError("wind.gusts must be a list")
         for item in config["gusts"]:
             item = _section(item, "gust")
-            _keys(item, {"start_time_s", "duration_s", "delta_velocity_w_m_s"}, "gust")
+            _keys(item, _GUST_KEYS, "gust")
+            if item.get("shape") is not None and item["shape"] not in GUST_SHAPES:
+                raise ValueError(f"gust shape must be one of {', '.join(GUST_SHAPES)}")
             _optional_time(item, "start_time_s")
             _optional_time(item, "duration_s", positive=True)
             _optional_array(item, "delta_velocity_w_m_s", (3,))
     if config.get("turbulence") is not None:
         turbulence = _section(config["turbulence"], "turbulence")
-        _keys(turbulence, {"enabled", "time_constant_s", "stationary_std_w_m_s"}, "turbulence")
+        _keys(turbulence, _TURBULENCE_KEYS, "turbulence")
         _enabled(turbulence, "turbulence")
+        mode = _turbulence_mode(turbulence)
         for key in ("time_constant_s", "stationary_std_w_m_s"):
-            _optional_array(turbulence, key, (3,))
-            if turbulence.get(key) is not None:
-                values = np.asarray(turbulence[key])
-                if np.any(values < 0) or (key == "time_constant_s" and np.any(values == 0)):
-                    raise ValueError(f"turbulence.{key} is outside its allowed range")
+            if turbulence.get(key) is None:
+                continue
+            if mode == "axes":
+                values = finite_array(turbulence[key], (3,), key)
+            else:
+                values = np.array(
+                    [finite_scalar(turbulence[key], f"turbulence.{key} (one number with mode: direction)")]
+                )
+            if np.any(values < 0) or (key == "time_constant_s" and np.any(values == 0)):
+                raise ValueError(f"turbulence.{key} is outside its allowed range")
+        if turbulence.get("direction_w") is not None:
+            if mode != "direction":
+                raise ValueError("turbulence.direction_w is only used with mode: direction")
+            if not np.any(finite_array(turbulence["direction_w"], (3,), "direction_w")):
+                raise ValueError("turbulence.direction_w must be a nonzero vector")
+
+
+_ROTOR_WIND_CHANNELS = (
+    ("axial", "thrust_gain_per_m_s", "axial_thrust_gain_per_m_s"),
+    ("inplane_drag", "drag_n_per_m_s", "inplane_drag_n_per_m_s"),
+)
+
+
+def _validate_rotor_wind(config: Mapping) -> None:
+    _keys(config, {"enabled", "axial", "inplane_drag"}, "rotor_wind")
+    for name, key, _ in _ROTOR_WIND_CHANNELS:
+        if config.get(name) is None:
+            continue
+        channel = _section(config[name], f"rotor_wind.{name}")
+        _keys(channel, {"enabled", key}, f"rotor_wind.{name}")
+        _enabled(channel, f"rotor_wind.{name}")
+        if channel.get(key) is not None:
+            value = finite_scalar(channel[key], f"rotor_wind.{name}.{key}")
+            if name == "inplane_drag" and value < 0:
+                raise ValueError("rotor_wind.inplane_drag.drag_n_per_m_s must be nonnegative")
+
+
+def _build_rotor_wind(config: Mapping, wind: WindField | None) -> RotorWind | None:
+    """The enabled rotor-wind channels, or None; requires an enabled wind field."""
+    config = _section(config, "rotor_wind")
+    _validate_rotor_wind(config)
+    if not _enabled(config, "rotor_wind"):
+        return None
+    if wind is None:
+        raise ValueError("enabled rotor_wind requires an enabled wind field (effects.wind)")
+    coefficients = {}
+    for name, key, argument in _ROTOR_WIND_CHANNELS:
+        channel = _section(_required(config, name, "rotor_wind"), f"rotor_wind.{name}")
+        if _enabled(channel, f"rotor_wind.{name}"):
+            coefficients[argument] = _required(channel, key, f"rotor_wind.{name}")
+    if not coefficients:
+        raise ValueError("enabled rotor_wind needs at least one enabled channel: axial or inplane_drag")
+    return RotorWind(**coefficients)
 
 
 def _validate_optional_disturbance(item: Mapping) -> None:
@@ -242,24 +371,12 @@ def _validate_ou_wrench(config: Mapping) -> None:
 def build_effects(config: Mapping) -> EffectsPipeline:
     """Build from the YAML effects section; missing enabled parameters fail closed."""
     config = _section(config, "effects")
-    _keys(config, {"wind", "aerodynamic", "disturbances", "ou_wrench"}, "effects")
+    _keys(config, {"wind", "aerodynamic", "rotor_wind", "disturbances", "ou_wrench"}, "effects")
     wind_config = _section(_required(config, "wind", "effects"), "wind")
     aero_config = _section(_required(config, "aerodynamic", "effects"), "aerodynamic")
     ou_config = _section(_required(config, "ou_wrench", "effects"), "ou_wrench")
     _validate_ou_wrench(ou_config)
-    _keys(
-        wind_config,
-        {
-            "enabled",
-            "model",
-            "velocity_w_m_s",
-            "spatial_gradient_per_s",
-            "reference_position_w_m",
-            "gusts",
-            "turbulence",
-        },
-        "wind",
-    )
+    _keys(wind_config, _WIND_KEYS, "wind")
     _keys(
         aero_config,
         {
@@ -291,16 +408,30 @@ def build_effects(config: Mapping) -> EffectsPipeline:
         gusts = []
         for item in gust_configs:
             item = _section(item, "gust")
-            _keys(item, {"start_time_s", "duration_s", "delta_velocity_w_m_s"}, "gust")
+            _keys(item, _GUST_KEYS, "gust")
+            shape = item.get("shape") or "one_minus_cosine"
+            if shape == "step":
+                if "duration_s" not in item:
+                    raise ValueError("a step gust requires explicit duration_s (None means until the end of the run)")
+                duration = item["duration_s"]
+            else:
+                duration = _required(item, "duration_s", "gust")
             gusts.append(
-                Gust(*(_required(item, key, "gust") for key in ("start_time_s", "duration_s", "delta_velocity_w_m_s")))
+                Gust(
+                    _required(item, "start_time_s", "gust"),
+                    duration,
+                    _required(item, "delta_velocity_w_m_s", "gust"),
+                    shape,
+                )
             )
         turbulence = _section(_required(wind_config, "turbulence", "wind"), "turbulence")
-        _keys(turbulence, {"enabled", "time_constant_s", "stationary_std_w_m_s"}, "turbulence")
-        tau = std = None
+        _keys(turbulence, _TURBULENCE_KEYS, "turbulence")
+        tau = std = direction = None
         if _enabled(turbulence, "turbulence"):
             tau = _required(turbulence, "time_constant_s", "turbulence")
             std = _required(turbulence, "stationary_std_w_m_s", "turbulence")
+            if _turbulence_mode(turbulence) == "direction":
+                direction = _required(turbulence, "direction_w", "turbulence")
         wind = UniformGustWind(
             _required(wind_config, "velocity_w_m_s", "wind"),
             gusts=gusts,
@@ -308,6 +439,9 @@ def build_effects(config: Mapping) -> EffectsPipeline:
             reference_position_w_m=wind_config.get("reference_position_w_m"),
             turbulence_time_constant_s=tau,
             turbulence_std_w_m_s=std,
+            turbulence_direction_w=direction,
+            start_time_s=wind_config.get("start_time_s") or 0.0,
+            end_time_s=wind_config.get("end_time_s"),
         )
     effects = []
     if _enabled(aero_config, "aerodynamic"):
@@ -315,6 +449,7 @@ def build_effects(config: Mapping) -> EffectsPipeline:
             raise ValueError("enabled aerodynamics requires an explicit wind field, including explicit still air")
         keys = ("linear_drag_b_kg_s", "quadratic_drag_b_kg_m", "angular_linear_drag_b_nm_s", "center_of_pressure_b_m")
         effects.append(BodyDrag(**{key: _required(aero_config, key, "aerodynamic") for key in keys}))
+    rotor_wind = None if config.get("rotor_wind") is None else _build_rotor_wind(config["rotor_wind"], wind)
     disturbances = _required(config, "disturbances", "effects")
     if not isinstance(disturbances, (list, tuple)):
         raise ValueError("effects.disturbances must be a list")
@@ -357,4 +492,7 @@ def build_effects(config: Mapping) -> EffectsPipeline:
         keys = sorted(_OU_KEYS - {"enabled", "end_time_s"})
         parameters = {key: _required(ou_config, key, "ou_wrench") for key in keys}
         effects.append(OUWrench(**parameters, end_time_s=ou_config.get("end_time_s")))
+    if rotor_wind is not None:
+        # Appended last: earlier plugins keep their random streams with or without rotor wind.
+        effects.append(rotor_wind)
     return EffectsPipeline(effects, wind)

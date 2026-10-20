@@ -197,6 +197,29 @@ def test_motor_order_once_per_tick_and_external_wrench_is_added_once():
     assert actuator.mixing_calls == 1
 
 
+def test_rotor_speed_offsets_scale_prop_forces_and_reaction_torques_after_the_motor_model():
+    backend = make_backend()
+    offsets = np.array([20.0, -20.0, 0.0, 10.0])
+    backend.apply_motor_speeds(np.full(4, 300.0), Wrench.zero(), rotor_speed_offset_rps=offsets)
+    result = backend.telemetry()
+    speeds = np.asarray(result["motor_speed_rps"])
+    expected = 1e-5 * (speeds + offsets) ** 2
+    np.testing.assert_allclose(result["applied_thrust_n"], expected)
+    np.testing.assert_allclose(result["rotor_speed_effective_rps"], speeds + offsets)
+    np.testing.assert_allclose(result["motor_state_thrust_n"], 1e-5 * speeds**2)  # motor state without wind
+    np.testing.assert_allclose(result["motor_wrench_b"], backend.allocation_matrix_b @ expected)
+    force, torque, _ = backend.submissions[0]
+    for motor, body_id in enumerate([2, 1, 3, 4]):
+        np.testing.assert_allclose(force[0, body_id], [0, 0, expected[motor]], rtol=1e-6)
+        np.testing.assert_allclose(
+            torque[0, body_id], [0, 0, backend._rotor_directions[motor] * 0.07 * expected[motor]], rtol=1e-6
+        )
+    backend.reset()
+    result = backend.telemetry()
+    np.testing.assert_array_equal(result["rotor_speed_offset_rps"], 0)
+    np.testing.assert_allclose(result["applied_thrust_n"], 1e-5 * np.asarray(result["motor_speed_rps"]) ** 2)
+
+
 def test_wrench_submission_uses_backend_order_and_shift_to_root_body_com():
     backend = make_backend()
     wrench = Wrench([0, 0, 12], [1, 2, 3])

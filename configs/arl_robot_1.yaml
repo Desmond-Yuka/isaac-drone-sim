@@ -99,17 +99,29 @@ allocation:
   regularization: 0.0            # 可显式惩罚相对上一指令的变化
 
 effects:
-  wind:
+  wind:                         # 世界系风场（风速 m/s，写的是空气往哪走）：均值 + 阵风 + OU 湍流；作用到旋翼见 rotor_wind，作用到机身见 aerodynamic
     enabled: false
     model: uniform_gusts
-    velocity_w_m_s: null
+    velocity_w_m_s: null        # 平均风；任意方向用分量写，如 3 m/s 朝 30°：[2.598, 1.5, 0.0]
     spatial_gradient_per_s: null
     reference_position_w_m: null
-    gusts: []
+    start_time_s: 0.0           # 风从这一刻起直接以满强度出现（均值、阵风、OU 都是），之前为静风
+    end_time_s: null            # null = 持续到结束
+    gusts: []                   # 每项 {start_time_s, duration_s, delta_velocity_w_m_s, shape}；shape: one_minus_cosine（平滑升落，默认）或 step（瞬间出现，duration_s: null 表示一直持续）
     turbulence:
       enabled: false
+      mode: axes                # axes：每个世界轴一个独立 OU，σ、τ 各 3 个数（只随机一个轴就把其余轴 σ 设 0）；direction：沿 direction_w 的单个 OU，σ、τ 各 1 个数
+      direction_w: null         # mode: direction 时的世界系方向，自动归一化：x 轴 [1, 0, 0]，z 轴 [0, 0, 1]，水平 45° [1, 1, 0]
       time_constant_s: null
-      stationary_std_w_m_s: null
+      stationary_std_w_m_s: null  # 平稳标准差；复位时直接按平稳分布取值，一开始就是满强度，不从 0 慢慢长起来
+  rotor_wind:                   # 风作用到旋翼（按机体系分工）：沿桨轴的风 → 每桨等效转速偏移；桨盘平面内的风 → 质心阻力。只算风本身，不含飞机自身运动；需要 wind.enabled
+    enabled: false
+    axial:
+      enabled: false
+      thrust_gain_per_m_s: null # c：悬停时沿桨轴每 1 m/s 风（上升气流为正）每桨推力的相对变化；δΩ_i = c/2 · Ω_hover,i · u_axial,i，加在电机模型之后
+    inplane_drag:
+      enabled: false
+      drag_n_per_m_s: null      # k：桨盘平面内每 1 m/s 风对整机的阻力 [N/(m/s)]，作用在质心、顺着风
   aerodynamic:
     enabled: false
     linear_drag_b_kg_s: null

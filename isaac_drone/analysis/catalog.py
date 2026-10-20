@@ -134,6 +134,42 @@ def _constant(item: dict, sep: str) -> str:
     return "const " + (" + ".join(pieces) or "0") + frame + window
 
 
+def _wind(wind: dict, sep: str) -> str:
+    """``wind (3,0,0) m/s + OU along (1,0,0) 1 m/s τ 1 s + 1 gust (1 step) from 2 s``."""
+    text = "wind " + _vector(wind.get("velocity_w_m_s") or [0.0], "m/s", sep)
+    turbulence = wind.get("turbulence") or {}
+    if turbulence.get("enabled"):
+        std, tau = turbulence.get("stationary_std_w_m_s"), turbulence.get("time_constant_s")
+        if (turbulence.get("mode") or "axes") == "direction":
+            direction = _vector(turbulence.get("direction_w") or [0.0], "", sep)
+            text += f" + OU along {direction} {_g(std)} m/s τ {_g(tau)} s"
+        else:
+            text += f" + OU {_vector(std or [0.0], 'm/s', sep)} τ {_vector(tau or [0.0], 's', sep)}"
+    gusts = wind.get("gusts") or []
+    if gusts:
+        steps = sum(1 for gust in gusts if gust.get("shape") == "step")
+        text += f" + {len(gusts)} gust{'s' if len(gusts) > 1 else ''}" + (f" ({steps} step)" if steps else "")
+    start, end = wind.get("start_time_s") or 0.0, wind.get("end_time_s")
+    if end is not None:
+        text += f" {start:g}–{end:g} s"
+    elif start:
+        text += f" from {start:g} s"
+    return text
+
+
+def _rotor_wind(rotor: dict) -> str | None:
+    """``axial 0.05/(m/s) → rotor speed, in-plane drag 0.5 N/(m/s)``; None when off."""
+    if not rotor.get("enabled"):
+        return None
+    pieces = []
+    axial, drag = rotor.get("axial") or {}, rotor.get("inplane_drag") or {}
+    if axial.get("enabled"):
+        pieces.append(f"axial {_g(axial.get('thrust_gain_per_m_s'))}/(m/s) → rotor speed")
+    if drag.get("enabled"):
+        pieces.append(f"in-plane drag {_g(drag.get('drag_n_per_m_s'))} N/(m/s)")
+    return ", ".join(pieces) or None
+
+
 def settings_line(config: dict) -> str | None:
     """One line of the physics settings that differ from an ideal plant, None for pre-schema-2 configs.
 
@@ -155,9 +191,12 @@ def settings_line(config: dict) -> str | None:
     parts += [_constant(item, ",") for item in effects.get("disturbances") or [] if item.get("enabled", True)]
     wind = effects.get("wind") or {}
     if wind.get("enabled"):
-        parts.append("wind" + (" + turbulence" if (wind.get("turbulence") or {}).get("enabled") else ""))
+        parts.append(_wind(wind, ","))
     if (effects.get("aerodynamic") or {}).get("enabled"):
         parts.append("drag")
+    rotor = _rotor_wind(effects.get("rotor_wind") or {})
+    if rotor:
+        parts.append(f"rotor wind: {rotor}")
     mismatch = config.get("model_mismatch") or {}
     for key, label in _MISMATCH:
         value = mismatch.get(key)
@@ -198,9 +237,14 @@ def _settings_rows(config: dict) -> list[tuple[str, str]]:
     constants = [_constant(item, ", ") for item in effects.get("disturbances") or [] if item.get("enabled", True)]
     rows.append(("Constant disturbances", "; ".join(constants) or "none"))
     wind = effects.get("wind") or {}
-    turbulence = (wind.get("turbulence") or {}).get("enabled")
-    rows.append(("Wind", ("on" + (", turbulence" if turbulence else "")) if wind.get("enabled") else "off"))
+    rows.append(("Wind (world frame)", _wind(wind, ", ") if wind.get("enabled") else "off"))
     rows.append(("Aerodynamic drag", "on" if (effects.get("aerodynamic") or {}).get("enabled") else "off"))
+    rows.append(
+        (
+            "Wind on the rotors (axial → rotor speed, in-plane → drag)",
+            _rotor_wind(effects.get("rotor_wind") or {}) or "off",
+        )
+    )
     mismatch = config.get("model_mismatch") or {}
     ratios = [f"{label} ×{_vector(mismatch[key])}" for key, label in _MISMATCH if mismatch.get(key) is not None]
     rows.append(("Model mismatch (plant / controller)", ", ".join(ratios) or "none"))
