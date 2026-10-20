@@ -90,7 +90,7 @@ class SyntheticBackend:
         moments = np.cross(origins - self.mass.com_b, axes) + reaction[:, None] * axes
         self.allocation_matrix_b = np.vstack((axes.T, moments.T))
         self.native = TranscribedThruster(p, self.dt, config["vehicle"]["thrusters"])
-        self.motor = NativeRpsActuator(self.native, np.zeros((1, 4)))
+        self.motor = NativeRpsActuator(self.native, np.zeros((1, 4)), dynamics=config["vehicle"]["motor_model_enabled"])
         self.contact_floor_z = p.com_support_height_m
         self.reset()
 
@@ -201,6 +201,7 @@ class SyntheticBackend:
             "motor_wrench_b": self.allocation_matrix_b @ self.native.curr_thrust[0],
             "total_wrench_b": self.submitted.vector,
             "has_submitted_wrench": self.has_submitted,
+            "motor_model_enabled": self.motor.dynamics,
             "motor_speed_source": "synthetic_plant_native_rps_adapter_state",
             "linear_acceleration_source": "unavailable_in_synthetic_plant",
             "contact_impulse_n_s": self.contact_impulse_n_s,
@@ -263,7 +264,9 @@ def run_simulation(config: dict, *, figures: bool = True, log=print, log_root=No
         "backend": description,
         "backend_kind": "synthetic",
         "state_source": "simulation_truth",
-        "motor_model": "RPS commands through NativeRpsActuator with transcribed native integrators",
+        "motor_model": "RPS commands through NativeRpsActuator with transcribed native integrators"
+        if backend.motor.dynamics
+        else "RPS commands applied without motor dynamics (motor model off)",
         **loop.run_metadata(),
         "limitations": description["limitations"],
     }

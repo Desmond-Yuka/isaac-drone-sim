@@ -482,6 +482,35 @@ def test_speed_limits_rate_limit_and_zero_shutdown_are_distinct():
         adapter.step([[np.nan, 0, 0]])
 
 
+def test_motor_model_off_sets_speed_to_the_limited_command_without_integration():
+    motor = make_actuator([0, 1, 2], [1e-5, 2e-5, 4e-5], rate=10.0)
+    adapter = NativeRpsActuator(motor, np.zeros((1, 3)), dynamics=False)
+    adapter.step([[0.0, 1.0, 100000.0]])
+    limited = [[0, np.sqrt(0.1 / 2e-5), np.sqrt(10 / 4e-5)]]
+    np.testing.assert_allclose(adapter.target_rps, limited)
+    np.testing.assert_allclose(adapter.rps, limited)  # no lag and no rate limit within the step
+    np.testing.assert_allclose(motor.curr_thrust, motor.thrust_const * adapter.rps**2)
+    assert motor.mixing_calls == 0 and motor.rate_calls == 0
+    adapter.step([[0.0, 0.0, 0.0]])
+    np.testing.assert_array_equal(adapter.rps, np.zeros((1, 3)))  # zero stops immediately
+    with pytest.raises(ValueError, match="nonnegative"):
+        adapter.step([[-1, 0, 0]])
+
+
+def test_backend_honours_the_motor_model_switch():
+    backend = make_backend()
+    backend.config["vehicle"]["motor_model_enabled"] = False
+    backend._initialize_speed_actuators()
+    backend.apply_motor_speeds([200.0, 300.0, 400.0, 500.0], Wrench.zero())
+    result = backend.telemetry()
+    np.testing.assert_allclose(result["motor_speed_rps"], result["commanded_motor_speed_rps"])
+    np.testing.assert_allclose(result["applied_thrust_n"], result["native_clipped_thrust_target_n"])
+    assert result["motor_model_enabled"] is False
+    assert result["motor_speed_source"] == "direct_rps_state_set_to_limited_command_each_step_motor_model_off"
+    assert backend.robot.actuators["thrusters"].mixing_calls == 0
+    assert make_backend().telemetry()["motor_model_enabled"] is True  # bare configs keep the native dynamics
+
+
 def test_thrust_to_rps_is_pure_per_motor_and_preserves_off():
     kf = np.array([1e-5, 2e-5, 3e-5, 4e-5])
     result = thrust_to_motor_speeds([0, 0.01, 2, 100], kf, np.full(4, 0.1), np.full(4, 10.0))

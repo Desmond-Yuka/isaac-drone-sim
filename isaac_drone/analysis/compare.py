@@ -3,8 +3,8 @@
 Up to four runs also get the per-run figure set (position.png, ...) with all
 runs overlaid in each figure, e.g. a disturbed run against its undisturbed twin.
 
-Typical use: the same trajectory flown by different controllers or gains, e.g.
-``python -m isaac_drone compare runs/A runs/B --labels geometric pid``.
+Typical use: the same trajectory flown with different gains or disturbances, e.g.
+``python -m isaac_drone compare runs/A runs/B --labels calm disturbed``.
 """
 
 from __future__ import annotations

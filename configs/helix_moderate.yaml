@@ -1,6 +1,5 @@
 # 同一 helix 几何，固定时长（起飞 4 s、螺旋 24 s，峰值约 3.2 m/s、名义倾角约 50°）。
-# 最短时间 helix（helix.yaml）贴着推力包线规划，依赖几何控制器的 jerk/snap 前馈；
-# 本文件给没有这类前馈的控制器（如 cascaded_pid）留出余量，便于在同一轨迹上对比。
+# 最短时间 helix（helix.yaml）贴着推力包线规划，依赖控制器的 jerk/snap 前馈；本文件是给反馈留更多余量的慢速版。
 extends: helix.yaml
 
 simulation:

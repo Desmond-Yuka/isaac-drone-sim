@@ -138,7 +138,8 @@ def settings_line(config: dict) -> str | None:
     """One line of the physics settings that differ from an ideal plant, None for pre-schema-2 configs.
 
     E.g. ``OU force (1,0,0)±0.5 N τ 1 s; mass ×1.2``. The ideal plant has no
-    disturbance, no model mismatch, no rotor gyroscopic torque and seed 0.
+    disturbance, no model mismatch, no rotor gyroscopic torque, no motor lag and
+    seed 0. Configs from before the motor-model switch always had motor lag.
     """
     if config.get("schema_version") != 2:
         return None
@@ -162,9 +163,12 @@ def settings_line(config: dict) -> str | None:
         value = mismatch.get(key)
         if value is not None and any(float(item) != 1.0 for item in (value if isinstance(value, list) else [value])):
             parts.append(f"{label} ×{_vector(value, '', ',')}")
-    inertia = (config.get("vehicle") or {}).get("rotor_inertia_kg_m2")
+    vehicle = config.get("vehicle") or {}
+    inertia = vehicle.get("rotor_inertia_kg_m2")
     if inertia:
         parts.append(f"gyro J_r {inertia:g}")
+    if vehicle.get("motor_model_enabled", True):
+        parts.append("motor lag")
     seed = (config.get("simulation") or {}).get("seed")
     if seed:
         parts.append(f"seed {seed}")
@@ -200,8 +204,19 @@ def _settings_rows(config: dict) -> list[tuple[str, str]]:
     mismatch = config.get("model_mismatch") or {}
     ratios = [f"{label} ×{_vector(mismatch[key])}" for key, label in _MISMATCH if mismatch.get(key) is not None]
     rows.append(("Model mismatch (plant / controller)", ", ".join(ratios) or "none"))
-    inertia = (config.get("vehicle") or {}).get("rotor_inertia_kg_m2")
+    vehicle = config.get("vehicle") or {}
+    inertia = vehicle.get("rotor_inertia_kg_m2")
     rows.append(("Rotor gyroscopic torque", f"on, J_r {inertia:g} kg·m²" if inertia else "off"))
+    if vehicle.get("motor_model_enabled", True):
+        thrusters = vehicle.get("thrusters") or {}
+        lag = ", ".join(
+            f"{label} {_vector(thrusters[key], 's', '–')}"
+            for key, label in (("tau_inc_range", "τ up"), ("tau_dec_range", "τ down"))
+            if thrusters.get(key) is not None
+        )
+        rows.append(("Motor model (first-order rotor-speed lag)", "on" + (f", {lag}" if lag else "")))
+    else:
+        rows.append(("Motor model (first-order rotor-speed lag)", "off: rotor speed = command, no lag"))
     rows.append(("Seed", str((config.get("simulation") or {}).get("seed", "?"))))
     return rows
 

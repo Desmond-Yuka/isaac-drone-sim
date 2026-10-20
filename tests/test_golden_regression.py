@@ -1,13 +1,15 @@
-"""Closed-loop numerical regression against traces recorded before the modular refactor.
+"""Closed-loop numerical regression against recorded synthetic-plant traces.
 
-tests/data/golden_synthetic.npz was produced at commit 7a458b4 by the original
-MotionControlLoop flying the synthetic CPU plant: the minimum-time helix config
-for 20 s and the hold config (airborne start at 200 rps) for 5 s. The Version3
-knobs (rotor gyroscopic torque, OU wrench, model mismatch) are pinned off
-(``NEUTRAL``), which reproduces those traces exactly. Rows are
-subsampled every ``<name>_stride`` physics steps (row k = state after step
-stride*(k+1)). Refactors must reproduce them to round-off; a deliberate change
-of flight behaviour must regenerate the file and say so in its commit.
+tests/data/golden_synthetic.npz holds the synthetic CPU plant flying the
+minimum-time helix config for 20 s and the hold config (airborne start at
+200 rps) for 5 s. It was first recorded at commit 7a458b4 and regenerated with
+``scripts/make_golden.py`` on 2026-10-21, when the geometric controller's
+position integral was switched on and the motor model off by default. The
+optional knobs (rotor gyroscopic torque, OU wrench, model mismatch, motor model)
+are pinned off (``NEUTRAL``). Rows are subsampled every ``<name>_stride``
+physics steps (row k = state after step stride*(k+1)). Refactors must reproduce
+them to round-off; a deliberate change of flight behaviour must regenerate the
+file and say so in its commit.
 """
 
 from pathlib import Path
@@ -25,18 +27,19 @@ CONFIGS = {"helix": ROOT / "configs/helix.yaml", "hold": ROOT / "configs/arl_rob
 TOLERANCE = {"rtol": 1e-9, "atol": 1e-9}
 NEUTRAL = [
     "vehicle.rotor_inertia_kg_m2=null",
+    "vehicle.motor_model_enabled=false",
     "effects.ou_wrench.enabled=false",
     "model_mismatch={mass_ratio: 1.0, inertia_ratio: [1.0, 1.0, 1.0], "
     "thrust_coefficient_ratio: 1.0, reaction_torque_ratio: 1.0}",
 ]
 
 
-def fly(name, steps):
+def fly(name, steps, stride=None):
     config = load_config(CONFIGS[name], overrides=NEUTRAL)
     plant = SyntheticBackend(config)
     loop = MotionControlLoop(config, plant)
     loop.reset()
-    stride = int(GOLDEN[f"{name}_stride"])
+    stride = int(GOLDEN[f"{name}_stride"]) if stride is None else stride
     rows = {key: [] for key in ("pos", "quat", "rps", "wrench", "target")}
     errors, record = [], None
     for index in range(steps):

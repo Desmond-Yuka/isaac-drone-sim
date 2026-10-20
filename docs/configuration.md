@@ -8,13 +8,12 @@
 |---|---|
 | `configs/arl_robot_1.yaml` | 基础配置：仿真、机型、推进器、场景、日志、录制、默认几何控制器、空中初态定点悬停（hold） |
 | `configs/helix.yaml` | 继承基础配置：地面零转速起飞 + 最短时间 helix，完成判据 |
-| `configs/helix_moderate.yaml` | 继承 helix：同一几何、固定时长（约 3.3 m/s 峰值），给无前馈的控制器留余量 |
-| `configs/helix_cascaded_pid.yaml` | 继承 helix_moderate：只把控制器换成级联 PID |
+| `configs/helix_moderate.yaml` | 继承 helix：同一几何、固定时长（约 3.3 m/s 峰值）的慢速版，给反馈留余量 |
 
 子文件用 `extends: <相对路径>` 继承父文件，只写差异：
 
 - 映射（mapping）逐层合并；列表和标量整体替换。
-- 若子文件某段的 `kind` 与父文件不同（例如 `trajectory.kind: hold → helix`，`controller.kind: geometric → cascaded_pid`），这一段**整段替换**，不会继承旧类型的参数。
+- 若子文件某段的 `kind` 与父文件不同（例如 `trajectory.kind: hold → helix`），这一段**整段替换**，不会继承旧类型的参数。
 - 支持多级继承，循环继承会报错。
 
 新实验的推荐做法：复制一个最接近的文件，改名，只保留要改的字段。
@@ -39,37 +38,33 @@ python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
 |---|---|
 | `simulation` | 物理步长 `dt`、控制降频、渲染间隔、设备、重力、随机种子、时长、原生 SimulationCfg 覆盖 |
 | `recording` | 可选多机位视频（仅 isaaclab 后端），见 README |
-| `vehicle` | 资产、旋翼方向及其来源、转子惯量 `rotor_inertia_kg_m2`（陀螺力矩，默认 null 关闭）、推进器动力学、初态、`launch`（地面起飞、离地间隙、`spin_up_s` 起转时长）、原生/USD 覆盖 |
+| `vehicle` | 资产、旋翼方向及其来源、转子惯量 `rotor_inertia_kg_m2`（陀螺力矩，默认 null 关闭）、电机响应模型开关 `motor_model_enabled`（默认 false：转速当步等于指令，无响应延迟；true：原生一阶滞后，按 `tau_inc_range`/`tau_dec_range`）、推进器参数、初态、`launch`（地面起飞、离地间隙、`spin_up_s` 起转时长）、原生/USD 覆盖 |
 | `limits` | 控制器和轨迹规划**共用**的飞行包线：`max_tilt_rad`、`max_yaw_rate_rad_s`、`max_acceleration_m_s2` |
 | `controller` | `kind` + 该控制器的参数（见第 4 节） |
 | `allocation` | 有界加权分配的权重和正则化 |
 | `trajectory` | `kind` + 该轨迹的参数（见第 5 节） |
 | `completion` | 终点悬停完成判据；`null` 表示不设判据（跑完所有步即成功） |
 | `effects` | 常值外力/力矩、`ou_wrench` 随机外扰（力世界系、力矩机体系，均值 + 逐轴标准差 + 相关时间）、风、气动阻力；`ou_wrench` 默认开启（力均值 [1,0,0] N、各轴标准差 0.5 N、τ=1 s；`helix.yaml` 从起转结束 2 s 起作用），其余默认关闭 |
-| `model_mismatch` | 对象实际值 / 控制器标称值之比：`mass_ratio`、`inertia_ratio`、`thrust_coefficient_ratio`、`reaction_torque_ratio`；全为 1 时无失配，默认 `mass_ratio: 1.2` |
+| `model_mismatch` | 对象实际值 / 控制器标称值之比：`mass_ratio`、`inertia_ratio`、`thrust_coefficient_ratio`、`reaction_torque_ratio`；全为 1 时无失配，默认全为 1（关闭） |
 | `scene` / `logging` | 地面与灯光；日志目录、运行目录名里的实验名 `run_name`（`null` = YAML 文件名，目录名规则见 README「运行目录」）、记录间隔、刷新间隔 |
 
 `vehicle.launch.spin_up_s`：起转阶段参考保持起点，电机指令乘以 0→1 的平滑包络；轨迹在起转结束时刻才开始。地面起飞必须 > 0。地面起飞时轨迹锚定在后端真值（物理放置位置）；空中起始锚定在控制器看到的状态（可以是估计器输出）。
 
 ## 4. 控制器
 
-### `geometric`：几何控制（Lee SO(3)）
+### `geometric`：几何控制（Lee SO(3)，唯一控制器）
 
-位置 PID + SO(3) 姿态控制，含 jerk/snap 与完整惯量前馈。增益：`position_kp` [s⁻²]、`velocity_kd` [s⁻¹]、`position_ki` [s⁻³]、`integral_limit_m_s`、`attitude_kp` [N·m/rad]、`angular_rate_kd` [N·m·s/rad]。
-
-### `cascaded_pid`：级联 PID
-
-位置 → 速度 → 姿态 → 机体角速度四级串联。增益单位都是 1/s（积分 1/s²），角速度环按实际完整惯量归一化，所以增益可以直接理解为各环带宽，与机体尺寸无关。
+位置环 PID + SO(3) 姿态 PD，含 jerk/snap 与完整惯量前馈。
 
 | 参数 | 含义 |
 |---|---|
-| `position_kp` | 位置误差 → 速度修正 [1/s] |
-| `velocity_kp`、`velocity_ki`、`velocity_integral_limit_m_s2` | 速度误差 → 加速度；积分项上限 [m/s²] |
-| `attitude_kp` | 姿态误差 → 角速度设定 [1/s] |
-| `rate_kp`、`rate_ki`、`rate_integral_limit_rad_s2` | 角速度误差 → 角加速度；积分项上限 [rad/s²] |
-| `max_velocity_correction_m_s`、`max_body_rate_rad_s` | 可选限幅，`null` 为不限 |
+| `position_kp` [s⁻²] | P：位置误差 → 加速度 |
+| `velocity_kd` [s⁻¹] | D：速度误差 → 加速度 |
+| `position_ki` [s⁻³] | I：位置误差积分 → 加速度；默认开启（基础配置 `[1.5, 1.5, 0.5]`，`helix.yaml` `[2, 2, 0.5]`），某轴填 0 即关闭该轴积分 |
+| `integral_limit_m_s` [m·s] | 位置误差积分的逐轴上限；分配饱和或推力方向被限幅时积分不再增长 |
+| `attitude_kp` [N·m/rad]、`angular_rate_kd` [N·m·s/rad] | 姿态环 PD 的直接力矩增益（姿态环没有积分项） |
 
-它没有 jerk/snap 或姿态角速度前馈，是对照组而不是跟踪最优。最短时间 helix 按“完美前馈跟踪”规划、贴着推力包线（名义倾角约 66°），在 CPU 合成对象上测试过的所有 PID 增益都飞不了，所以对照实验使用 `helix_moderate.yaml` 的轨迹。
+`helix.yaml` 的位置环 PID（kp `[20, 20, 16]`、kd `[9, 9, 7]`、ki `[2, 2, 0.5]`）是 2026-10-20 在 Isaac 里按无扰动 helix 的同一时刻跟踪误差调的：误差随 D 单调下降，但 D 越大，OU 力扰动下对反馈力的数值微分越会让电机饱和（σ=2 N 时 kd 9 为 1.1%，kd 20 为 14%），所以取 kd 9；kp 对无扰动误差几乎无影响；ki 越小越好，取测试过的最小值。理想双积分器闭环 `s³ + kd s² + kp s + ki` 的稳定上限是 `ki < kp·kd`。
 
 ## 5. 轨迹
 
@@ -123,12 +118,12 @@ python -m isaac_drone sweep --config configs/helix_moderate.yaml --set effects.o
 
 ```bash
 # 网格扫参（CPU 合成后端，多进程并行）：每个点都是完整运行目录
-python -m isaac_drone sweep --config configs/helix_cascaded_pid.yaml \
-    --grid 'controller.attitude_kp=[[8,8,3],[10,10,3],[12,12,3]]' \
-    --grid 'controller.rate_kp=[[20,20,8],[24,24,8]]' \
+python -m isaac_drone sweep --config configs/helix.yaml \
+    --grid 'controller.position_ki=[[0,0,0],[3,3,2],[6,6,4]]' \
+    --grid 'controller.velocity_kd=[[6,6,4],[7,7,5]]' \
     --rank helix.position_error_max_m
 # 对比几次运行（可只比某个阶段）
-python -m isaac_drone compare runs/<A> runs/<B> --labels geometric pid --phase helix
+python -m isaac_drone compare runs/<A> runs/<B> --labels no_integral integral --phase helix
 ```
 
 扫参开始前会先校验所有点的配置；单个点发散只记为失败，不会中断整个扫参。结果写在 `runs/sweep_<月日-时分>/summary.{csv,json,md}`，按 `--rank` 指标升序排列；每个点的运行目录是 `points/<序号>/`，序号即 summary 里的 `index` 列；指标名见 `isaac_drone/analysis/metrics.py`（整体指标直接写名字，分阶段写 `阶段名.指标名`）。

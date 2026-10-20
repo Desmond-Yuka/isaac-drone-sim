@@ -28,7 +28,17 @@ def test_helix_config_extends_base_and_only_states_differences():
     helix["effects"]["ou_wrench"]["start_time_s"] = base["effects"]["ou_wrench"]["start_time_s"]
     assert helix["effects"] == base["effects"]
     assert helix["controller"]["attitude_kp"] == base["controller"]["attitude_kp"]
-    assert helix["controller"]["position_kp"] == [12.0, 12.0, 8.0]
+    assert helix["controller"]["position_kp"] == [20.0, 20.0, 16.0]
+    for config in (base, helix):  # P, I and D all on; motor model and model mismatch off
+        assert config["controller"]["kind"] == "geometric"
+        assert all(min(config["controller"][key]) > 0 for key in ("position_kp", "position_ki", "velocity_kd"))
+        assert config["vehicle"]["motor_model_enabled"] is False
+        assert config["model_mismatch"] == {
+            "mass_ratio": 1.0,
+            "inertia_ratio": [1.0, 1.0, 1.0],
+            "thrust_coefficient_ratio": 1.0,
+            "reaction_torque_ratio": 1.0,
+        }
     assert base["trajectory"]["kind"] == "hold" and helix["trajectory"]["kind"] == "helix"
     assert "position_w_m" not in helix["trajectory"]
     assert "extends" not in helix

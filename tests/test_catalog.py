@@ -23,8 +23,12 @@ def fly(root, *overrides, config=DEFAULT_CONFIG, **options):
 
 
 def test_settings_line_lists_only_departures_from_an_ideal_plant():
-    assert settings_line(load_config(DEFAULT_CONFIG)) == "OU force (1,0,0)±0.5 N τ 1 s; mass ×1.2"
+    assert settings_line(load_config(DEFAULT_CONFIG)) == "OU force (1,0,0)±0.5 N τ 1 s"
     assert settings_line(load_config(DEFAULT_CONFIG, overrides=IDEAL)) == "ideal (no disturbance, no model mismatch)"
+    lagged = load_config(DEFAULT_CONFIG, overrides=[*IDEAL, "vehicle.motor_model_enabled=true"])
+    assert settings_line(lagged) == "motor lag"
+    del lagged["vehicle"]["motor_model_enabled"]  # configs from before the switch always had motor lag
+    assert settings_line(lagged) == "motor lag"
     config = load_config(
         DEFAULT_CONFIG,
         overrides=[
@@ -54,9 +58,10 @@ def test_every_run_writes_a_card_with_command_settings_and_metrics(tmp_path):
     assert "| Controller / trajectory | geometric / helix |" in card
     assert "| Video | - |" in card
     assert "| OU random force (world frame, at CoM) | mean (1, 0, 0) N, SD 0.5 N, τ 1 s, from 2 s to the end |" in card
-    mismatch = "mass ×1.2, inertia ×1, thrust coeff ×1, reaction torque ×1"
+    mismatch = "mass ×1, inertia ×1, thrust coeff ×1, reaction torque ×1"
     assert f"| Model mismatch (plant / controller) | {mismatch} |" in card
     assert "| Rotor gyroscopic torque | off |" in card and "| Seed | 0 |" in card
+    assert "| Motor model (first-order rotor-speed lag) | off: rotor speed = command, no lag |" in card
     assert "## Metrics" in card and "| Position error RMS [m] |" in card
     assert "## Figures" not in card  # flown without figures
 
@@ -163,4 +168,4 @@ def test_figure_subtitle_names_the_run_and_its_physics_settings(tmp_path, monkey
     plots.plot_run(run)
     (run / "config.json").unlink()
     plots.plot_run(run)
-    assert subtitles == [f"{run.name}\nOU force (1,0,0)±0.5 N τ 1 s; mass ×1.2", run.name]
+    assert subtitles == [f"{run.name}\nOU force (1,0,0)±0.5 N τ 1 s", run.name]

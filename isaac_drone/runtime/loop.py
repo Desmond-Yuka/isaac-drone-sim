@@ -164,6 +164,7 @@ class MotionControlLoop:
         plan = None
         if self.trajectory.planned_phases:
             # Motor lag uses the slowest time constant of the sampling range (+dt for the discrete mixing).
+            # Kept with vehicle.motor_model_enabled false too, so switching the motor model leaves the plan unchanged.
             thrusters = self.config["vehicle"]["thrusters"]
             lag = self.dt_s if thrusters["use_discrete_approximation"] else 0.0
             plan = plan_minimum_time(

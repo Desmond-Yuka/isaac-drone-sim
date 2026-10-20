@@ -2,13 +2,13 @@
 
 基于 Isaac Sim 6.1 + 本地 Isaac Lab 3.0 / PhysX 的 ARL-Robot-1 无人机运动控制工程。
 
-控制链：**轨迹 → 控制器 → 有界推力分配 → RPS 电机指令 → 电机动态 → 四个旋翼各自的推力/反扭矩 → 物理引擎**。
+控制链：**轨迹 → 控制器 → 有界推力分配 → RPS 电机指令 → 电机动态（默认关闭）→ 四个旋翼各自的推力/反扭矩 → 物理引擎**。
 初始化以后不写整机位姿或速度。轨迹、控制器、后端都是可替换的插件，通过 YAML 的 `kind:` 选择：
 
 | 可替换部分 | 现有实现 |
 |---|---|
 | 后端 `--backend` | `isaaclab`（Isaac Sim / PhysX，服务器）· `synthetic`（CPU 合成刚体，秒级，本地和 CI 可跑） |
-| 控制器 `controller.kind` | `geometric`（Lee SO(3) + jerk/snap 前馈）· `cascaded_pid`（位置→速度→姿态→角速度） |
+| 控制器 `controller.kind` | `geometric`：位置环 PID（P、I、D 默认全开）+ Lee SO(3) 姿态 PD，含 jerk/snap 前馈 |
 | 轨迹 `trajectory.kind` | `hold` · `helix`（原地起飞 + 三维圆柱螺旋上升 + 终点悬停，可最短时间规划） |
 
 两个后端共用同一套控制循环、日志、指标和画图。合成后端**不是** Isaac Sim，也不是 ARL 模型：它用刻意不对称的合成质量/惯量/电机参数，适合快速调参、回归和对比，结论需要回到 Isaac Sim 验证。
@@ -63,7 +63,7 @@ python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
 | `isaac_drone/core/` | 状态/力/质量等数据契约、SO(3) 数学、数值校验、插件参数解析与注册表 |
 | `isaac_drone/config/` | YAML 加载（`extends`、`--set`）与 schema 校验 |
 | `isaac_drone/trajectories/` | 分段轨迹框架、hold、helix、时间律、最短时间规划、可行性筛查、完成判据 |
-| `isaac_drone/control/` | 控制器接口与注册表、几何控制、级联 PID、有界推力分配 |
+| `isaac_drone/control/` | 控制器接口与注册表、几何控制（位置 PID + SO(3) 姿态）、有界推力分配 |
 | `isaac_drone/effects/` | 外力/力矩扰动：常值、OU 随机外扰（力世界系、力矩机体系；默认开启）、风/气动阻力（默认关闭，需标定） |
 | `isaac_drone/runtime/` | 物理步控制循环 `MotionControlLoop`（含旋翼陀螺力矩与 `model_mismatch` 失配旋钮）、与后端无关的运行器和钩子（叠加显示、录像、节拍、指标、画图） |
 | `isaac_drone/sim/` | 后端接口；`synthetic.py` CPU 合成对象；`isaaclab/` 场景、PhysX 后端、相机、应用入口；原生电机积分的复用 |
@@ -72,25 +72,23 @@ python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
 | `isaac_drone/viz/` | 轨迹叠加几何、墙钟节拍、机位取景、视频编码 |
 | `assets/Robots/` | ARL-Robot-1（使用中）与 Crazyflie（保留）USD 资产，保持原资产库目录结构 |
 | `scripts/download_assets.sh` | 从 Isaac 云端资产库重新下载原版资产 |
-| `tests/` | 单元、契约和闭环回归测试（`tests/data/golden_synthetic.npz` 锁定重构前的飞行轨迹） |
+| `tests/` | 单元、契约和闭环回归测试（`tests/data/golden_synthetic.npz` 锁定默认配置下的飞行轨迹，`scripts/make_golden.py` 重新生成） |
 | `docs/` | [配置与扩展](docs/configuration.md)、[架构与物理约定](docs/architecture.md)、[遥测字段](docs/telemetry.md)、[helix 数学](docs/spiral_math.md)、[服务器操作](docs/server_runbook.md) |
 
 ## 典型实验流程
 
 1. **写配置**：复制最接近的 `configs/*.yaml`，用 `extends` 继承，只改要测试的部分（轨迹参数、控制器类型/增益、限制等）。
-2. **CPU 上迭代**：`run --backend synthetic` 检查能否飞通；`sweep` 扫增益或轨迹参数；`compare` 对比控制器或参数组。
+2. **CPU 上迭代**：`run --backend synthetic` 检查能否飞通；`sweep` 扫增益或轨迹参数；`compare` 对比参数组。
 3. **Isaac Sim 验证**：把选定配置在服务器上 `run --backend isaaclab`；拷回运行目录后同样可以 `summarize` / `compare`。
 4. **新增轨迹或控制器**：一个参数 dataclass + 一个注册的工厂函数即可，见 [docs/configuration.md 第 6 节](docs/configuration.md#6-新增控制器或轨迹)。控制器可以直接输出每桨推力（`output = "rotor_thrust"`），为接入学习策略预留。
 
-对照示例（同一中速 helix，几何控制 vs 级联 PID）：
+对照示例（同一 helix，无扰动 vs 默认 OU 外扰）：
 
 ```bash
-python -m isaac_drone run --backend synthetic --config configs/helix_moderate.yaml
-python -m isaac_drone run --backend synthetic --config configs/helix_cascaded_pid.yaml
-python -m isaac_drone compare runs/<几何控制运行> runs/<PID运行> --labels geometric pid --phase helix
+python -m isaac_drone run --backend synthetic --config configs/helix.yaml --set effects.ou_wrench.enabled=false
+python -m isaac_drone run --backend synthetic --config configs/helix.yaml
+python -m isaac_drone compare runs/<无扰动运行> runs/<OU运行> --labels calm ou --phase helix
 ```
-
-CPU 合成对象上、关闭默认 OU 外扰与质量失配（`--set effects.ou_wrench.enabled=false --set model_mismatch.mass_ratio=1.0`）时，helix 段最大位置误差：几何控制约 0.03 m，级联 PID 约 0.21 m。
 
 ## 运行目录
 
@@ -104,7 +102,7 @@ python -m isaac_drone runs --video         # 只看录了视频的；--config he
 python -m isaac_drone runs --write-cards   # 给列出的运行（含旧运行）补写/重写 README.md
 ```
 
-物理设置一栏只列与理想对象（无外扰、无失配、无陀螺力矩、seed 0）不同的项，例如 `OU force (1,0,0)±0.5 N τ 1 s; mass ×1.2`，取自该次运行实际生效的 `config.json`，不受之后 YAML 默认值修改的影响。2026-10-19 之前的运行目录仍是 `<UTC时间>Z_<随机编号>` 旧名，总表同样能列出；schema 1 的早期运行没有记录配置名和命令行，相应栏显示 `?`。
+物理设置一栏只列与理想对象（无外扰、无失配、无陀螺力矩、无电机滞后、seed 0）不同的项，例如 `OU force (1,0,0)±0.5 N τ 1 s; mass ×1.2; motor lag`，取自该次运行实际生效的 `config.json`，不受之后 YAML 默认值修改的影响。2026-10-19 之前的运行目录仍是 `<UTC时间>Z_<随机编号>` 旧名，总表同样能列出；schema 1 的早期运行没有记录配置名和命令行，相应栏显示 `?`。
 
 两个后端的运行目录格式相同：
 
@@ -124,11 +122,11 @@ python -m isaac_drone runs --write-cards   # 给列出的运行（含旧运行�
 
 [configs/helix.yaml](configs/helix.yaml)：从地面、零电机转速开始，2 s 起转，原地垂直升高 1 m，再沿半径 1 m 的圆柱螺旋上升 5 圈并增高 5 m，最后保持终点直到实验结束。圆柱轴线自动偏置，使螺旋起点与起飞终点重合。
 
-起飞和螺旋时长填 `null` 时按实际质量、惯量、分配矩阵、每桨推力上下限和电机滞后规划最短时间：名义每桨推力保持在推力范围中间 `thrust_utilization`（默认 85%）内，两端余量留给反馈，并满足 `limits` 的倾角、偏航速率和加速度。当前配置规划结果约为起飞 1.3 s、螺旋 7.8 s、峰值 4.7 m/s、名义倾角约 66°（启动时打印 `Trajectory plan: ...`，实际数值以运行时为准）。机头用 `tangent`（沿切线）时高速绕圈四桨推力均衡，才能用满推力。时长填数字则使用固定时长的九次多项式。
+起飞和螺旋时长填 `null` 时按实际质量、惯量、分配矩阵、每桨推力上下限和电机滞后规划最短时间（电机滞后按 `tau_*_range` 留余量，与是否启用电机模型无关，所以开关电机模型不改变轨迹）：名义每桨推力保持在推力范围中间 `thrust_utilization`（默认 85%）内，两端余量留给反馈，并满足 `limits` 的倾角、偏航速率和加速度。当前配置规划结果约为起飞 1.3 s、螺旋 7.8 s、峰值 4.7 m/s、名义倾角约 66°（启动时打印 `Trajectory plan: ...`，实际数值以运行时为准）。机头用 `tangent`（沿切线）时高速绕圈四桨推力均衡，才能用满推力。时长填数字则使用固定时长的九次多项式。
 
 终点判定看真实位置、速度、偏航和角速度，连续满足容差 2 s 才成功；成功后仍继续闭环悬停。超时、用户提前停止或结束时不满足条件，运行都不会标记成功，命令返回非零状态（2）。
 
-默认开启 20% 质量失配（`model_mismatch.mass_ratio: 1.2`）和 OU 随机外扰（`helix.yaml` 从起转结束 2 s 起作用）：最短时间规划按控制器以为的较轻质量进行，比真实能力更激进，螺旋段会出现推力饱和；位置环默认无积分，终点悬停约有 0.3 m 稳态下沉，超过 0.25 m 的完成判据，所以默认配置下任务判为失败（返回 2）。`helix.yaml` 的完成判据按默认 OU 下的悬停抖动放宽（位置 0.25 m、速度 0.25 m/s、角速度 0.8 rad/s、偏航 0.1 rad），只开 OU、不加失配时可以判成功。无扰动、无失配的对照加 `--set effects.ou_wrench.enabled=false --set model_mismatch.mass_ratio=1.0`。旋翼陀螺力矩默认关闭（`vehicle.rotor_inertia_kg_m2: null`），原因见 [docs/architecture.md 第 6 节](docs/architecture.md#6-扰动和气动扩展)。
+默认开启 OU 随机外扰（`helix.yaml` 从起转结束 2 s 起作用）和位置环积分；电机响应模型和模型失配默认关闭：`vehicle.motor_model_enabled: false` 时每个物理步转速直接等于指令（无响应延迟），`model_mismatch` 全为 1。`--set vehicle.motor_model_enabled=true` 恢复原生一阶电机滞后（加速 50–80 ms、减速 5 ms），`--set model_mismatch.mass_ratio=1.2` 加 20% 质量失配。`helix.yaml` 的完成判据按默认 OU 下的悬停抖动放宽（位置 0.25 m、速度 0.25 m/s、角速度 0.8 rad/s、偏航 0.1 rad）。无扰动对照加 `--set effects.ou_wrench.enabled=false`。旋翼陀螺力矩默认关闭（`vehicle.rotor_inertia_kg_m2: null`），原因见 [docs/architecture.md 第 6 节](docs/architecture.md#6-扰动和气动扩展)。
 
 当前采用用户明确选择的**对角同向仿真旋向**，不宣称经过实机测量。实际旋翼位置、质量、质心和完整惯量都从 USD/PhysX 读取，不在控制器里写死。未知的气动参数保留为 null，相关模型默认关闭；电池模型已移除，待与 Kidambi 确认建模方式后再接入。**尚未在完整 Isaac Sim 环境中完成增益调参验飞**；CPU 合成对象上的结果不能作为实机或 Isaac Sim 的精度保证。
 

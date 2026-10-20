@@ -89,7 +89,7 @@ _ROTORS = ("BL", "BR", "FL", "FR")
 _AXES = ("x", "y", "z")
 _RPY = ("roll", "pitch", "yaw")
 _QUATERNION = ("w", "x", "y", "z")
-_DESIRED_ATTITUDE = "Geometric-controller desired attitude R_d, held since reference_sample_time_s"
+_DESIRED_ATTITUDE = "Controller desired attitude R_d, held since reference_sample_time_s"
 
 
 def _scalar(name, unit, sampling, source, description, *, dtype="float64"):
@@ -430,7 +430,7 @@ BASIC_FIELDS = (
         "rotor magnitude",
         _START,
         "RPS command sent to the motor model after allocation, startup envelope and running limits",
-        "Ideal rotor speed for this interval; the motor model lags behind it.",
+        "Ideal rotor speed for this interval; the motor model, when enabled, lags behind it.",
         _ROTORS,
     ),
     _vector(
@@ -587,8 +587,8 @@ def _wrench_fields():
                 "body at step_start_time_s",
                 _MOTOR_START,
                 "force_command_b_n - force_motor_b_n",
-                "Requested minus motor-produced force: allocation saturation plus motor lag. Not a gravity/contact "
-                "balance.",
+                "Requested minus motor-produced force: allocation saturation plus motor lag (if enabled). "
+                "Not a gravity/contact balance.",
             ),
             _scalar(
                 "force_error_norm_n",
@@ -605,7 +605,7 @@ def _wrench_fields():
                 "body at step_start_time_s, about CoM",
                 _MOTOR_START,
                 "torque_command_b_nm - torque_motor_b_nm",
-                "Requested minus motor-produced torque: allocation saturation plus motor lag.",
+                "Requested minus motor-produced torque: allocation saturation plus motor lag (if enabled).",
             ),
             _scalar(
                 "torque_error_norm_nm",

@@ -1,5 +1,5 @@
 # 三维 helix 起飞任务：地面零转速起飞 → 原地垂直升高 → 恒定半径螺旋上升 → 终点悬停。
-# 继承 arl_robot_1.yaml，只写差异。时长填 null = 按实际推力包线规划最短时间。
+# 继承 arl_robot_1.yaml，只写差异。时长填 null = 按实际推力包线规划最短时间（按电机时间常数留余量，与是否启用电机模型无关，轨迹不变）。
 extends: arl_robot_1.yaml
 
 simulation:
@@ -26,9 +26,12 @@ limits:
   max_yaw_rate_rad_s: 6.283185307179586  # tangent 机头巡航偏航速率约 5 rad/s
 
 controller:
-  # 高速 helix：电机滞后(τ≤80 ms)使推力跟不上时靠反馈追回；CPU 合成对象上调到阻尼比≈1，尚未验飞
-  position_kp: [12.0, 12.0, 8.0] # [s^-2]
-  velocity_kd: [7.0, 7.0, 5.0]   # [s^-1]
+  # 2026-10-20 在 Isaac 里按无扰动 helix 调的位置环 PID（电机模型关、无失配；见 runs/ou_std_sweep_1020/pid_tuning）：
+  # 同一时刻螺旋段误差随 D 单调下降（kd 7→40：6.5→3.0 mm），但 OU 力 σ=2 N 时电机饱和随 D 急增（kd 9：1.1%，20：14%，40：44%），
+  # 取不明显饱和的 kd 9；kp 对无扰动误差几乎无影响，取 20 使螺旋段最大误差和 z 误差最小；ki 越小越好，取测试的最小值（积分仍开）
+  position_kp: [20.0, 20.0, 16.0] # P [s^-2]
+  velocity_kd: [9.0, 9.0, 7.0]    # D [s^-1]
+  position_ki: [2.0, 2.0, 0.5]    # I [s^-3]
 
 trajectory:
   kind: helix
@@ -46,7 +49,7 @@ trajectory:
   rest_angular_speed_tolerance_rad_s: 0.001
 
 completion:                     # 按默认 OU 外扰下的悬停抖动放宽（20 个种子：位置 ≤0.20 m、速度 ≤0.18 m/s、角速度 ≤0.63 rad/s）
-  position_tolerance_m: 0.25      # 不容忍 20% 质量失配的稳态下沉（0.3–0.46 m）
+  position_tolerance_m: 0.25
   speed_tolerance_m_s: 0.25
   yaw_tolerance_rad: 0.10
   angular_speed_tolerance_rad_s: 0.8

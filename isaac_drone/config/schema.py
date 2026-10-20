@@ -195,6 +195,7 @@ def _validate_vehicle(vehicle, scene):
         "rotor_directions",
         "rotor_direction_source",
         "rotor_inertia_kg_m2",
+        "motor_model_enabled",
         "thrusters",
         "initial_state",
         "launch",
@@ -202,6 +203,7 @@ def _validate_vehicle(vehicle, scene):
         "usd_overrides",
     }
     _keys(vehicle, fields, fields, "vehicle")
+    _boolean(vehicle["motor_model_enabled"], "vehicle.motor_model_enabled")
     if vehicle["name"] != "arl_robot_1":
         raise ConfigurationError("This configuration supports ARL-Robot-1 only")
     for key in ("asset_path", "prim_path"):

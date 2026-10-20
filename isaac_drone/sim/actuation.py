@@ -2,7 +2,9 @@
 
 This is a coefficient-based propulsion model, not CFD or a calibrated electric
 motor model. Positive running commands retain native per-motor minimum thrust;
-zero commands explicitly request spin-down to stopped rotors.
+zero commands explicitly request spin-down to stopped rotors. With the motor
+model switched off (``vehicle.motor_model_enabled: false``) the rotor speed
+equals the limited command within the same physics step: no response lag.
 """
 
 from __future__ import annotations
@@ -54,10 +56,15 @@ def thrust_to_motor_speeds(thrust_n, sampled_kf, thrust_min_n, thrust_max_n):
 
 
 class NativeRpsActuator:
-    """Store RPS directly and reuse the native actuator's integration functions."""
+    """Store RPS directly and reuse the native actuator's integration functions.
 
-    def __init__(self, native, initial_rps):
+    ``dynamics=False`` bypasses the first-order integrator: each step sets the
+    rotor speed to the limited command (motor model off, no response lag).
+    """
+
+    def __init__(self, native, initial_rps, *, dynamics: bool = True):
         self.native = native
+        self.dynamics = bool(dynamics)
         self.rps = native_value(initial_rps, native.curr_thrust)
         self.raw_target_rps = self.rps * 1.0
         self.target_rps = self.rps * 1.0
@@ -97,6 +104,12 @@ class NativeRpsActuator:
         if np.any(target < 0):
             raise ValueError("Motor RPS commands are nonnegative magnitudes")
         limited = np.where(target == 0, 0.0, np.clip(target, minimum, maximum))
+        if not self.dynamics:
+            self.raw_target_rps = native_value(target, self.rps)
+            self.target_rps = native_value(limited, self.rps)
+            self.rps = self.target_rps * 1.0
+            self._synchronize_thrust()
+            return self.rps
         tau_inc = finite_array(numpy_value(self.native.tau_inc_s), kf.shape, "native tau_inc_s")
         tau_dec = finite_array(numpy_value(self.native.tau_dec_s), kf.shape, "native tau_dec_s")
         if np.any(tau_inc <= 0) or np.any(tau_dec <= 0):

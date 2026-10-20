@@ -119,7 +119,7 @@ thrust_state = sampled_kf × rps²
 
 旋翼顺序固定为后左 BL、后右 BR、前左 FL、前右 FR。记录值为非负幅值；配置里的反扭矩正负号不被当作已测量的机械转速方向。
 
-`motor_speed_source` 明确说明这是使用原生积分公式演化的转速状态，不是实机编码器数据。`motor_thrust_command_n` 和 `motor_thrust_applied_n` 分开保留，便于观察电机响应滞后和饱和。
+`motor_speed_source` 明确说明这是使用原生积分公式演化的转速状态，不是实机编码器数据。`motor_thrust_command_n` 和 `motor_thrust_applied_n` 分开保留，便于观察电机响应滞后和饱和。电机模型关闭时（默认，`backend.motor_model_enabled: false`），每个物理步转速直接设为受限后的指令，`motor_speed_source` 为 `direct_rps_state_set_to_limited_command_each_step_motor_model_off`，实际与命令只差运行上下限的截断。
 
 ## 力和力矩要区分阶段
 
@@ -154,6 +154,6 @@ torque_net_world = Δ(angular_momentum_world) / Δt
 
 ## 任务与控制器 JSONL 诊断
 
-`motor_command_rps` 是当步四电机命令（经过起转包络及运行上下限），`backend.commanded_motor_speed_rps` 为执行器接受的目标，`basic.motor_speed_rps` 为动态响应后的实际转速。`startup_fraction` 是 0..1 的起转包络，`motor_command_thrust_n` 对应接受转速的静态推力目标；`allocated_thrust_n` 则保留启动缩放前的闭环分配结果。
+`motor_command_rps` 是当步四电机命令（经过起转包络及运行上下限），`backend.commanded_motor_speed_rps` 为执行器接受的目标，`basic.motor_speed_rps` 为动态响应后的实际转速（电机模型关闭时与接受的目标相同）。`startup_fraction` 是 0..1 的起转包络，`motor_command_thrust_n` 对应接受转速的静态推力目标；`allocated_thrust_n` 则保留启动缩放前的闭环分配结果。
 
-`external_wrench_b` 是 effects 扰动合力/合力矩（机体系），`gyroscopic_torque_b_nm` 是单独记录的旋翼陀螺力矩，二者之和才是提交给后端的附加力/力矩。`setpoint.jerk_w`、`setpoint.snap_w` 记录解析参考导数。`controller` 记录控制器类型 `kind` 及其自带明细：`geometric` 的 `force_derivative_source` 说明解析参考/数值反馈或限幅后全数值差分路径；`cascaded_pid` 的 `velocity_setpoint_w_m_s`、`rate_setpoint_b_rad_s`、`thrust_vector_limited`。姿态/角速度的“理想值”是控制器给出的期望姿态和期望角速度（级联 PID 为其角速度设定）。`mission_phase` 为 `spin_up`（地面起转）及轨迹各段名称，例如 helix 任务为 `spin_up / takeoff / helix / hold`，hold 任务为 `hold`。`mission` 在配置了 `completion` 时保存 post-step 真值误差、连续达标时间、成功及超时标志，否则为 null。这些诊断位于 JSONL；基础 CSV 仍保留导师要求的运动与动力数据字段。
+`external_wrench_b` 是 effects 扰动合力/合力矩（机体系），`gyroscopic_torque_b_nm` 是单独记录的旋翼陀螺力矩，二者之和才是提交给后端的附加力/力矩。`setpoint.jerk_w`、`setpoint.snap_w` 记录解析参考导数。`controller` 记录控制器类型 `kind` 及其自带明细：`geometric` 的 `force_derivative_source` 说明解析参考/数值反馈或限幅后全数值差分路径。姿态/角速度的“理想值”是控制器给出的期望姿态和期望角速度。`mission_phase` 为 `spin_up`（地面起转）及轨迹各段名称，例如 helix 任务为 `spin_up / takeoff / helix / hold`，hold 任务为 `hold`。`mission` 在配置了 `completion` 时保存 post-step 真值误差、连续达标时间、成功及超时标志，否则为 null。这些诊断位于 JSONL；基础 CSV 仍保留导师要求的运动与动力数据字段。

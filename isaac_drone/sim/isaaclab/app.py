@@ -231,7 +231,9 @@ def run_simulation(
         "backend": backend.telemetry(),
         "backend_kind": "isaaclab",
         "state_source": "simulation_truth",
-        "motor_model": "RPS commands and native first-order motor integrators",
+        "motor_model": "RPS commands and native first-order motor integrators"
+        if config["vehicle"]["motor_model_enabled"]
+        else "RPS commands applied without motor dynamics (motor model off)",
         **loop.run_metadata(),
         "limitations": LIMITATIONS,
     }

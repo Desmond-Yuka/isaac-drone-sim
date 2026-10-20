@@ -12,8 +12,8 @@ from isaac_drone.sim.synthetic import SyntheticBackend
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def make_plant():
-    config = load_config(ROOT / "configs/helix.yaml")
+def make_plant(*overrides):
+    config = load_config(ROOT / "configs/helix.yaml", overrides=overrides)
     plant = SyntheticBackend(config)
     launch = config["vehicle"]["launch"]
     plant.reset(plant.ground_start_position(launch["ground_z_m"], launch["clearance_m"]))
@@ -21,7 +21,7 @@ def make_plant():
 
 
 def test_synthetic_fixture_keeps_full_inertia_com_and_unequal_motor_lag():
-    plant = make_plant()
+    plant = make_plant("vehicle.motor_model_enabled=true")
     assert np.count_nonzero(plant.mass.com_b) == 3
     assert np.count_nonzero(plant.mass.inertia_com_b - np.diag(np.diag(plant.mass.inertia_com_b))) == 6
     assert len(set(plant.native.thrust_const[0])) == 4
@@ -32,6 +32,14 @@ def test_synthetic_fixture_keeps_full_inertia_com_and_unequal_motor_lag():
     np.testing.assert_allclose(plant.native.curr_thrust, plant.native.thrust_const * plant.motor.rps**2)
     with pytest.raises(RuntimeError, match="already prepared"):
         plant.apply_motor_speeds(np.full(4, 400.0), Wrench.zero())
+
+
+def test_motor_model_off_by_default_reaches_the_command_in_the_same_step():
+    plant = make_plant()
+    assert plant.motor.dynamics is False and plant.telemetry()["motor_model_enabled"] is False
+    plant.apply_motor_speeds(np.full(4, 400.0), Wrench.zero())
+    np.testing.assert_allclose(plant.motor.rps[0], 400.0)
+    np.testing.assert_allclose(plant.native.curr_thrust, plant.native.thrust_const * 400.0**2)
 
 
 def test_zero_motors_fall_to_contact_and_cannot_follow_target():

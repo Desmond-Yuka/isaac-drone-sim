@@ -55,7 +55,7 @@ mkdir -p runs && PYTHONUNBUFFERED=1 PUBLIC_IP=117.50.205.33 python -m isaac_dron
 
 **6. 开始运行**：点一下运行命令的终端，确保输入焦点在它上面，按**回车**。任务为 20 s 仿真时间，默认按真实时间播放；物理和记录本身慢于实时时会如实变慢（uc1 串流实测约 0.3×，约 70 s，见输出里的 `playback`）。结束后打印 `{"success": ...}`，程序退出，串流随之断开。再飞一次需重新执行第 4 步。
 
-换控制器或轨迹只需换 `--config` 或加 `--set`，例如 `--config configs/helix_cascaded_pid.yaml`。无画面批量运行用 `--visualizer none`（不串流时不需要 `--wait-for-start`）。
+换轨迹或增益只需换 `--config` 或加 `--set`，例如 `--config configs/helix_moderate.yaml`、`--set vehicle.motor_model_enabled=true`。无画面批量运行用 `--visualizer none`（不串流时不需要 `--wait-for-start`）。
 
 **7. 看结果、关机**
 

@@ -5,7 +5,14 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from isaac_drone.control import AllocationResult, BoundedAllocator, GeometricController
+from isaac_drone.config import load_config
+from isaac_drone.control import (
+    CONTROLLERS,
+    AllocationResult,
+    BoundedAllocator,
+    ControllerDiagnostics,
+    GeometricController,
+)
 from isaac_drone.core.rotations import (
     desired_attitude_kinematics,
     hat,
@@ -15,6 +22,9 @@ from isaac_drone.core.rotations import (
     vee,
 )
 from isaac_drone.core.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
+from isaac_drone.core.validation import ConfigurationError
+from isaac_drone.runtime import MotionControlLoop
+from isaac_drone.sim.synthetic import SyntheticBackend
 
 
 def config(**overrides):
@@ -430,3 +440,49 @@ def test_trajectory_high_derivatives_are_paired_and_finite():
         TrajectorySetpoint(np.zeros(3), jerk_w=np.zeros(3))
     with pytest.raises(ValueError, match="finite"):
         TrajectorySetpoint(np.zeros(3), jerk_w=np.zeros(3), snap_w=[0, 0, np.nan])
+
+
+def test_geometric_is_the_only_registered_controller():
+    assert CONTROLLERS.names() == ["geometric"]
+    section = load_config()["controller"]
+    for bad in ({"kind": "cascaded_pid"}, {"position_ki": [1.0, 1.0]}, {"unknown_gain": 1.0}):
+        with pytest.raises(ConfigurationError):
+            CONTROLLERS.parse({**section, **bad}, "controller")
+
+
+class DirectThrust:
+    """A policy-like controller that commands rotor thrusts directly (no allocation)."""
+
+    output = "rotor_thrust"
+
+    def __init__(self, thrusts):
+        self.thrusts = np.asarray(thrusts, dtype=float)
+        self.allocations = []
+
+    def reset(self):
+        pass
+
+    def compute(self, state, setpoint, dt_s):
+        return self.thrusts
+
+    def notify_allocation(self, result):
+        self.allocations.append(result)
+
+    def diagnostics(self):
+        return ControllerDiagnostics()
+
+
+def test_rotor_thrust_controllers_bypass_allocation_and_are_clipped_to_bounds():
+    config = load_config()
+    backend = SyntheticBackend(config)
+    policy = DirectThrust([-1.0, 3.0, 3.2, 20.0])
+    loop = MotionControlLoop(config, backend, controller=policy)
+    loop.reset()
+    record = loop.prepare_step()
+    np.testing.assert_allclose(record["allocated_thrust_n"], [0.1, 3.0, 3.2, 10.0])
+    assert record["allocation_saturated"]
+    assert record["controller"]["kind"] == "injected:DirectThrust"
+    np.testing.assert_allclose(record["requested_wrench_b"], backend.allocation_matrix_b @ policy.thrusts)
+    backend.step()
+    loop.finish_step()
+    assert policy.allocations and policy.allocations[0].saturated

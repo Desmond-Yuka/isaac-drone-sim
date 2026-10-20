@@ -607,6 +607,8 @@ class ARLBackend:
 
     def _initialize_speed_actuators(self, use_defaults=False):
         self._speed_actuators = {}
+        # Validated configs always carry the switch; bare test configs keep the native dynamics.
+        dynamics = self.config.get("vehicle", {}).get("motor_model_enabled", True)
         for name, actuator, indices in self._actuator_groups():
             if use_defaults:
                 initial = self.robot.data.default_thruster_rps[:, indices]
@@ -615,7 +617,7 @@ class ARLBackend:
                 if np.any(kf <= 0):
                     raise ValueError("Sampled motor coefficients must be positive")
                 initial = np.sqrt(np.maximum(_numpy(actuator.curr_thrust) / kf, 0))
-            self._speed_actuators[name] = NativeRpsActuator(actuator, initial)
+            self._speed_actuators[name] = NativeRpsActuator(actuator, initial, dynamics=dynamics)
 
     def motor_parameters(self):
         """Return canonical sampled per-motor parameters for control allocation."""
@@ -773,11 +775,15 @@ class ARLBackend:
         speeds = parameters["current_rps"]
         kf = parameters["sampled_kf"]
         target = finite_array(native_target[order], (4,), "limited motor speed target")
+        dynamics = all(adapter.dynamics for adapter in self._speed_actuators.values())
         return {
+            "motor_model_enabled": dynamics,
             "motor_speed_rps": speeds.tolist(),
             "motor_speed_rpm": finite_array(speeds * 60.0, (4,), "motor rpm").tolist(),
             "motor_speed_rad_s": finite_array(speeds * 2 * np.pi, (4,), "motor rad/s").tolist(),
-            "motor_speed_source": "direct_rps_state_integrated_with_native_motor_rate_and_rk4_or_euler",
+            "motor_speed_source": "direct_rps_state_integrated_with_native_motor_rate_and_rk4_or_euler"
+            if dynamics
+            else "direct_rps_state_set_to_limited_command_each_step_motor_model_off",
             "motor_speed_is_magnitude": True,
             "motor_speed_is_encoder_measurement": False,
             "motor_state_thrust_n": (kf * speeds**2).tolist(),
@@ -789,8 +795,10 @@ class ARLBackend:
             "commanded_motor_speed_source": (
                 "rps_command_with_native_running_limits_and_explicit_zero_shutdown_before_motor_lag"
             ),
-            "motor_shutdown_semantics": "zero_target_spins_down_with_native_fall_dynamics; "
-            "nonzero_target_retains_native_running_minimum",
+            "motor_shutdown_semantics": (
+                "zero_target_spins_down_with_native_fall_dynamics" if dynamics else "zero_target_stops_immediately"
+            )
+            + "; nonzero_target_retains_native_running_minimum",
             "actuators": groups,
         }
 

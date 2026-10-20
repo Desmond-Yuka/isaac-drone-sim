@@ -34,12 +34,13 @@ vehicle:
   rotor_directions: [-1, 1, 1, -1]
   rotor_direction_source: simulation_diagonal_pairs
   rotor_inertia_kg_m2: null         # 桨+电机转子极转动惯量 J_r，陀螺力矩 ω×(J_r e3 Σσ_iΩ_i)；默认 null 关闭。开启可填 3.5e-5（按 8 英寸桨估算的量级值，未实测）
+  motor_model_enabled: false        # 电机一阶响应模型（下面的 tau_inc/tau_dec 转速滞后）；默认 false 停用：每个物理步转速直接等于指令，无响应延迟。true 恢复原生电机动态
   thrusters:
     thruster_names_expr: [back_left_prop, back_right_prop, front_left_prop, front_right_prop]
     thrust_range: [0.1, 10.0]       # 每桨 [N]，保留原模型的非零下限
     thrust_const_range: [0.00000926312, 0.00001826312]  # N/(rps²)，reset 时采样
-    tau_inc_range: [0.05, 0.08]    # 加速 [s]
-    tau_dec_range: [0.005, 0.005]  # 减速 [s]
+    tau_inc_range: [0.05, 0.08]    # 加速 [s]；电机滞后只在 motor_model_enabled: true 时生效，最短时间规划始终按它留余量
+    tau_dec_range: [0.005, 0.005]  # 减速 [s]；同上
     torque_to_thrust_ratio: 0.07   # [m]，反扭矩/推力
     max_thrust_rate: 100000.0      # 保留上游字段名；源码实际限制 rps 的变化率，见文档
     use_discrete_approximation: true
@@ -86,11 +87,11 @@ limits:                          # 控制器与轨迹规划共用的飞行包线
   max_acceleration_m_s2: null    # 未额外设置指令加速度限制
 
 controller:
-  kind: geometric                # 可选：geometric（Lee SO(3)）、cascaded_pid；见 docs/configuration.md
-  position_kp: [4.0, 4.0, 2.5]   # 参考上游 Lee 配置范围上界 [s^-2]，尚未调参验飞
-  velocity_kd: [3.5, 3.5, 2.0]   # [s^-1]
-  position_ki: [0.0, 0.0, 0.0]   # 积分默认关闭，可显式开启；不是动力学假设
-  integral_limit_m_s: [1.0, 1.0, 1.0]
+  kind: geometric                # 几何控制（唯一控制器）：位置环 PID + Lee SO(3) 姿态 PD，含 jerk/snap 前馈；见 docs/configuration.md
+  position_kp: [4.0, 4.0, 2.5]   # P [s^-2]；参考上游 Lee 配置范围上界，尚未调参验飞
+  velocity_kd: [3.5, 3.5, 2.0]   # D [s^-1]
+  position_ki: [1.5, 1.5, 0.5]   # I [s^-3]，默认开启（P、I、D 全开）；按理想双积分器闭环极点取值（xy −1.5/−1/−1，z 阻尼比约 0.6）
+  integral_limit_m_s: [1.0, 1.0, 1.0]  # 位置误差积分 ∫e dt 的逐轴上限 [m s]
   attitude_kp: [1.85, 1.85, 0.4] # 直接力矩增益 [N m/rad]
   angular_rate_kd: [0.5, 0.5, 0.09] # [N m s/rad]
 allocation:
@@ -127,8 +128,8 @@ effects:
     start_time_s: 0.0
     end_time_s: null            # null = 持续到结束
 
-model_mismatch:                 # 对象实际值 / 控制器与规划器所用标称值；全为 1 时无失配
-  mass_ratio: 1.2               # Δm：默认 1.2 = 对象比控制器以为的重 20%
+model_mismatch:                 # 对象实际值 / 控制器与规划器所用标称值；全为 1 时无失配（默认停用）
+  mass_ratio: 1.0               # Δm：例如 1.2 = 对象比控制器以为的重 20%
   inertia_ratio: [1.0, 1.0, 1.0]  # ΔI 逐轴
   thrust_coefficient_ratio: 1.0 # ΔK_T：实际每桨推力 = ratio × 控制器以为的推力
   reaction_torque_ratio: 1.0    # ΔK_D：实际反扭矩系数 / 标称
