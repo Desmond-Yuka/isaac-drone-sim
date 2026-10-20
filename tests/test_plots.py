@@ -16,6 +16,7 @@ from isaac_drone.analysis.plots import (
     phase_starts,
     plot_comparison,
     plot_run,
+    wrap_settings,
 )
 from isaac_drone.core.types import MassProperties, TrajectorySetpoint, VehicleState, Wrench
 from isaac_drone.telemetry import RunRecorder
@@ -170,6 +171,12 @@ def test_phase_markers_follow_the_helix_config():
         (5.5, "helix"),
         (31.0, "hold"),
     ]
+
+
+def test_long_settings_lines_wrap_after_semicolons_only():
+    assert wrap_settings("OU force 1 N; mass ×1.2") == "OU force 1 N; mass ×1.2"
+    assert wrap_settings("aaaa; bbbb; cccc", width=10) == "aaaa; bbbb;\ncccc"
+    assert wrap_settings("a single part longer than the width", width=5) == "a single part longer than the width"
 
 
 def test_empty_run_is_rejected(tmp_path):

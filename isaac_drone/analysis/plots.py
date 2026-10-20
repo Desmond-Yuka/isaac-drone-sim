@@ -347,8 +347,21 @@ def plot_run(run_dir, output_dir=None) -> list[Path]:
     output = run / "plots" if output_dir is None else Path(output_dir)
     config_path = run / "config.json"
     settings = settings_line(json.loads(config_path.read_text(encoding="utf-8"))) if config_path.is_file() else None
+    settings = None if settings is None else wrap_settings(settings)
     subtitle = run.name if settings is None else f"{run.name}\n{settings}"
     return _write_figures([(run.name, data)], subtitle, phases, output)
+
+
+def wrap_settings(settings: str, width: int = 110) -> str:
+    """Break a physics-settings line after '; ' so that a long one stays inside the figure title."""
+    lines = [""]
+    for part in settings.split("; "):
+        if lines[-1] and len(lines[-1]) + 2 + len(part) > width:
+            lines[-1] += ";"
+            lines.append(part)
+        else:
+            lines[-1] = f"{lines[-1]}; {part}" if lines[-1] else part
+    return "\n".join(lines)
 
 
 def plot_comparison(run_dirs, labels, output_dir) -> list[Path]:
