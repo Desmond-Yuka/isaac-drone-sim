@@ -48,6 +48,8 @@ python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
 | `effects` | 常值外力/力矩、`ou_wrench` 随机外扰（力世界系、力矩机体系，均值 + 逐轴标准差 + 相关时间）、风场 `wind`、风作用到旋翼 `rotor_wind`、气动阻力；`ou_wrench` 默认开启（力均值 [1,0,0] N、各轴标准差 0.5 N、τ=1 s；`helix.yaml` 从起转结束 2 s 起作用），其余默认关闭。风场与风作用到旋翼见下文 |
 | `model_mismatch` | 对象实际值 / 控制器标称值之比：`mass_ratio`、`inertia_ratio`、`thrust_coefficient_ratio`、`reaction_torque_ratio`；全为 1 时无失配，默认全为 1（关闭） |
 | `scene` / `logging` | 地面与灯光；日志目录、运行目录名里的实验名 `run_name`（`null` = YAML 文件名，目录名规则见 README「运行目录」）、记录间隔、刷新间隔 |
+| `sensors`（可选） | 由真值合成的 IMU、磁力计、气压计、GPS 读数及其误差模型（见下文）；省略时取 `configs/arl_robot_1.yaml` 的默认段（全部开启）。开关传感器不改变飞行结果 |
+| `estimation`（可选） | 控制器用哪个状态：`mode` 为 `truth`（默认，真值）、`shadow`（估计器在线运行并记录，控制器仍用真值）或 `closed_loop`（控制器用估计值）；`kind` 目前只有 `passthrough`（直接返回真值，用于验证链路），滤波器留待下一阶段 |
 
 `vehicle.launch.spin_up_s`：起转阶段参考保持起点，电机指令乘以 0→1 的平滑包络；轨迹在起转结束时刻才开始。地面起飞必须 > 0。地面起飞时轨迹锚定在后端真值（物理放置位置）；空中起始锚定在控制器看到的状态（可以是估计器输出）。
 
@@ -83,6 +85,37 @@ python -m isaac_drone sweep --config configs/helix_rotor_wind.yaml \
 python -m isaac_drone run --backend synthetic --config configs/helix_rotor_wind.yaml \
     --set 'effects.wind.gusts=[{start_time_s: 6.0, duration_s: 2.0, delta_velocity_w_m_s: [0, 0, -2], shape: step}]'
 ```
+
+### 传感器与状态估计（`sensors`、`estimation`）
+
+`sensors` 在每个物理步末由步首/步末真值合成四种读数，写进 `telemetry.jsonl` 的 `sensors` 字段（docs/telemetry.md）。误差模型按 MATLAB 的 `imuSensor`（`accelparams` / `gyroparams` / `magparams`）、`altimeterSensor` 和 `gpsSensor` 文档复刻，参数名与 MATLAB 一一对应（小写下划线），默认值取 Pixhawk 6C 上的器件：ICM-42688-P、IST8310、MS5611 和 ZED-F9P 档 RTK。公式见 docs/architecture.md 第 5 节。
+
+通用规则：
+
+- 每个传感器都有 `enabled`、`rate_hz`、`delay_s`。采样率必须整除物理步频 1/dt（200 Hz 下可取 200、100、50、40、25、20、10 …），延迟必须是 dt 的整数倍（GPS 默认 0.12 s = 24 步）。
+- 安装位置 `position_b_m` 相对根链接（`base_link`）原点，杆臂相对质心由后端质量属性自动算出（IMU 默认在原点，杆臂 r = −com_b）；`orientation_rpy_rad` 是传感器系相对机体系的 Z-Y-X 欧拉角。
+- 随机数从 `SeedSequence([simulation.seed, 固定域标识])` 派生，每个传感器一条子流，与风场/OU 扰动用的 `SeedSequence(seed)` 不重合，所以 `simulation.seed` 同时决定扰动和传感器噪声，而打开/关闭/改参传感器不改变飞行。
+- `noise_type`：手册给的（单边）谱密度对应 MATLAB 默认的 `double-sided`，每样本 σ = 密度·√(fs/2)（200 Hz 时 10 × 密度）；`single-sided` 为 σ = 密度·√fs。
+
+| 段 | 内容 |
+|---|---|
+| `imu.accelerometer` / `imu.gyroscope` | MATLAB 参数：`measurement_range`（`null` = 不饱和）、`resolution`（0 = 不量化）、`constant_bias`、`axes_misalignment`（百分比：标量 = 全部非对角元，3 元向量或 3×3 矩阵同 MATLAB 规则）、`noise_density`、`bias_instability`、`random_walk`、`noise_type`、`temperature_bias`、`temperature_scale_factor`，陀螺另有 `acceleration_bias`（g 敏感性，乘传感器系比力）。`bias_instability` 是高斯-马尔可夫过程的平稳标准差，`bias_instability_time_constant_s` 是相关时间（MATLAB 用 1/f 滤波，这里不复现逐点样本，只复现统计量）。`temperature_c` 偏离 25 °C 时温漂和温度标度项才非零 |
+| `imu.vibration` | MATLAB 之外的旋翼振动项：加速度计/陀螺白噪声标准差（悬停时的值），`scale_with_thrust: true` 时按总推力/重量缩放 |
+| `magnetometer` | `field_w_ut` 世界系（ENU）地磁场常量；`motor_interference_b_ut_per_n15` 电机电流干扰系数，乘 Σ T_i^1.5（`applied_thrust_n`）；`model` 为 magparams 同名参数 |
+| `barometer` | `altimeterSensor`：`constant_bias_m`、`noise_density_m_sqrt_hz`、`bias_instability_m`、`decay_factor`。零偏不稳定性递推 β(k) = decay·β(k−1) + σ·w，decay 0 为白噪声、1 为随机游走，平稳标准差 σ/√(1−decay²) |
+| `gps` | `gpsSensor`：`profile` 为 `rtk` 或 `standard`，四个数值项（`horizontal_accuracy_m`、`vertical_accuracy_m`、`velocity_accuracy_m_s`、`decay_factor`）写 `null` 取档位值、写数字覆盖。位置误差逐轴 e(k) = decay·e(k−1) + σ·w，速度误差白噪声；输出天线的本地 ENU 位置/速度 |
+
+```bash
+# 只换普通 GPS 档，并让估计器旁路运行（控制器仍用真值）
+python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
+    --set sensors.gps.profile=standard --set estimation.mode=shadow
+# 闭环用估计值（目前只有 passthrough，结果应与 truth 完全一致）
+python -m isaac_drone run --backend synthetic --config configs/helix.yaml --set estimation.mode=closed_loop
+# 关掉传感器（飞行结果不变，只是不记录读数）
+python -m isaac_drone run --backend synthetic --set sensors.enabled=false
+```
+
+空中起始时 `closed_loop` 的轨迹锚定在估计器 t=0 的输出；helix 要求起始角速度小于 0.001 rad/s，带噪声的估计值可能在 reset 时就报错，接入真正的滤波器时要处理初始化（先对准再放行）。
 
 ## 4. 控制器
 

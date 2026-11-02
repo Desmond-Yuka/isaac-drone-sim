@@ -12,7 +12,8 @@ configs/*.yaml（extends 继承 + --set 覆盖）
         └── runtime.run_experiment（与后端无关：步进、记录、钩子）
               └── runtime.MotionControlLoop（每物理步一次）
                     ├── trajectories：分段轨迹的位置、速度、加速度、jerk、snap、偏航及其导数；起转阶段保持起点
-                    ├── StateProvider：当前为仿真真值，可注入传感器/估计器
+                    ├── sensors：步末由步首/步末真值合成 IMU/磁力计/气压计/GPS 读数（MATLAB 误差模型、延迟队列）
+                    ├── StateProvider：truth 真值 / shadow 估计器旁路记录 / closed_loop 控制器用估计值（estimation 包；滤波器留白）
                     ├── control：注册的控制器（geometric / 注入实例）→ 质心力矩或每桨推力
                     ├── control.BoundedAllocator：每桨有界推力目标 [N]
                     ├── effects：每物理步的附加质心力/力矩（常值/OU 随机外扰、风、气动阻力）+ 旋翼陀螺力矩
@@ -27,6 +28,8 @@ configs/*.yaml（extends 继承 + --set 覆盖）
 | `isaac_drone/trajectories/` | `SegmentedTrajectory` 框架、hold、C4 三维圆柱 helix、时间律、最短时间规划、可行性筛查、终点完成判据 |
 | `isaac_drone/control/` | 控制器接口与注册表、几何控制（位置 PID、SO(3) 姿态、完整惯量前馈）、推力方向限幅、有界控制分配 |
 | `isaac_drone/effects/` | 常值外力/力矩、OU 随机外扰、风场、阵风、相对气流阻力；扰动组合、作用点与参考系转换、时间窗 |
+| `isaac_drone/sensors/` | 噪声过程（白噪声、随机游走、高斯-马尔可夫、MATLAB 衰减递推）、`imuSensor` 误差链（`triaxial`）、步内真值运动学与比力（`truth`）、四个传感器、采样率/延迟/随机流管理（`suite`） |
+| `isaac_drone/estimation/` | 估计模式与估计器契约（`base`）、`passthrough` 状态提供者、估计/控制误差定义（`errors`）；滤波器（姿态、高度、15 维误差状态 EKF）留待下一阶段 |
 | `isaac_drone/runtime/` | 控制降频、物理步调度、起转包络、`model_mismatch` 标称模型、旋翼陀螺力矩、复位及异常状态处理（`loop`）；运行器与钩子（`runner`、`hooks`） |
 | `isaac_drone/sim/` | 后端/驱动接口（`base`）、原生电机积分复用（`actuation`、`native_thruster`）、CPU 合成对象（`synthetic`）、离线 USD 审计（`usd_audit`） |
 | `isaac_drone/sim/isaaclab/` | Isaac Lab API、四元数转换、真实几何/惯量提取、原生电机与施力（`backend`）；场景、驱动、串流界面刷新（`app`）；独立相机采集（`camera`） |
@@ -106,6 +109,44 @@ usd_overrides:
 3. 计算当步风/气动/外力；开启风作用到旋翼时，同时算出每个桨的等效转速偏移。
 4. 使用每个电机自己的采样 kf 将分配推力转为 **RPS** 命令；起转阶段有平滑启动包络。电机模型开启时直接积分 RPS，关闭时（默认，`vehicle.motor_model_enabled: false`）当步 RPS 等于受限后的指令；按 kf·RPS² 计算实际推力（有风作用到旋翼时按 kf·(RPS + 偏移)²），每个旋翼独立受力。向 PhysX 提交一次逐刚体数组，根刚体只有显式外部扰动。
 5. `sim.step()`，`robot.update(dt)`，记录真实推进器输出及状态，更新可选电池。
+6. 步末：用步首/步末真值合成传感器读数，交给状态提供者的 `update`；`read_state` 只查询不推进。第 k 步的读数在第 k+1 步控制器读状态之前到达，保证因果。
+
+传感器层的真值取法（`sensors/truth.py`）：角速度取步末机体角速度；比力是区间平均
+
+$$
+f_b = R_{\text{pair}}^{\top}\left(\frac{\Delta v_w}{\Delta t} - g_w\right)
+$$
+
+Isaac 后端配步首姿态（外力按步首机体系施加并保持一步），合成后端配步首/步末的 slerp 中点姿态（RK4 各子步按当时姿态转换推力）；后端用 `specific_force_attitude_pairing` 声明。这样地面支撑力自动包含在内，静止时读数为 (0, 0, +9.81)。安装点的比力加杆臂项
+
+$$
+f_{\text{imu}} = f_b + \alpha_b \times r + \omega_b \times (\omega_b \times r)
+$$
+
+其中 `α_b` 由世界系角速度差分再转到步末机体系（与 `telemetry/measurements.py` 相同），`r` 是安装点相对质心的机体系位置。GPS 天线的位置 `p + R r`、速度 `v + R(ω × r)`，气压计取安装点世界 z。
+
+误差链按 MATLAB `imuSensor` 的 Algorithms 顺序（`sensors/triaxial.py`）：安装误差 + 常值零偏 → 零偏不稳定性 → 白噪声 → 随机游走 → 温漂 → 陀螺 g 敏感性 → 温度标度 → 饱和 → 量化：
+
+$$
+d = \Big[\tfrac{M}{100} a + b_0 + \beta_1 + \beta_2 + \beta_3 + (T-25)\,b_T + k_g f\Big]\Big(1 + \tfrac{T-25}{100}\,s_T\Big),\qquad
+y = \text{Res}\cdot\operatorname{round}\!\Big(\tfrac{\operatorname{clip}(d,\pm\text{Range})}{\text{Res}}\Big)
+$$
+
+$$
+\beta_2 = w\sqrt{\tfrac{f_s}{s}}\,N,\qquad
+\beta_3(k) = \beta_3(k-1) + \frac{w(k)\,K}{\sqrt{f_s/s}},\qquad
+\beta_1(k) = e^{-\Delta t/\tau}\beta_1(k-1) + \sigma_B\sqrt{1-e^{-2\Delta t/\tau}}\,w(k)
+$$
+
+`s` 为 2（`double-sided`，MATLAB 默认，对应手册单边密度）或 1（`single-sided`）；`β₁` 用平稳标准差 `σ_B` = BiasInstability、相关时间 `τ` 的高斯-马尔可夫过程代替 MATLAB 的 1/f 滤波，精确离散与 `effects/stochastic.py` 相同。气压计和 GPS 按 `altimeterSensor` / `gpsSensor`：
+
+$$
+z_{\text{baro}} = z + b_0 + w\sqrt{\tfrac{f_s}{s}}\,N + \beta(k),\qquad
+\beta(k) = a\,\beta(k-1) + \sigma\,w(k),\qquad
+e_{\text{gps}}(k) = a\,e_{\text{gps}}(k-1) + \sigma\,w(k)
+$$
+
+`a` 为 DecayFactor：0 为白噪声、1 为随机游走（MATLAB 文档对两端的描述只与这个未归一化递推相容），平稳标准差 `σ/√(1−a²)`，时间常数 `−Δt/ln a`；GPS 速度误差为白噪声。磁力计读数为 `Rᵀ B_w + k_m Σ T_i^{1.5}` 再过同一误差链；IMU 另加随总推力/重量缩放的振动白噪声。随机数流 `SeedSequence([seed, 域标识])` 与扰动的 `SeedSequence(seed)` 独立。
 
 电机模型开启时，原生电机保留 `kf` 和 tau 的复位随机采样、非对称动态、rps² 推力关系、RK4/Euler、饱和；关闭时只保留 kf 采样、rps² 推力关系和转速上下限，没有响应延迟。最短时间规划始终按 tau 范围留超前余量，所以开关电机模型不改变参考轨迹。`max_thrust_rate` 虽沿用原生字段名/配置值，源码在 rps 误差积分中限幅，不能按名字误读成严格 N/s；日志记录真实采样的 kf/tau。
 
@@ -192,5 +233,7 @@ python -m isaac_drone run --backend isaaclab --config configs/helix.yaml
 ## 9. 本次验证的边界
 
 已执行普通 Python 数值/契约测试、配置校验，并使用实际 USD 解析检查结构和参数。`tests/test_golden_regression.py` 用 CPU 合成对象锁定重构前的闭环轨迹（helix 20 s、hold 5 s），任何改变飞行行为的修改都会被发现。测试覆盖非零质心、非对角惯量、旋翼顺序、力矩作用点、分配饱和、复位与时间配对、扰动和电池能量等。
+
+传感器层与估计接口（`sensors/`、`estimation/`）在合成后端上验证：开关传感器不改变飞行；`closed_loop` + `passthrough` 与真值飞行逐点一致（金标准回归）；噪声统计（白噪声 σ、Allan 斜率 ∓1/2、高斯-马尔可夫相关时间、衰减递推两端极限）、安装误差/饱和/量化、杆臂与配对姿态、采样率/延迟/时间戳均有单元测试。估计器算法本身尚未实现，Isaac 端的比力配对（步首姿态）尚待服务器实测。
 
 当前开发机器没有安装 Isaac Sim、Torch、Warp 完整运行栈，因此**尚未完成真实 PhysX 端到端悬停验飞**。假对象后端测试不替代该验证；提供 `--inspect` 和 `hold` 入口用于服务器后续实测。现有控制增益来自上游范围，尚未针对实际资产重新调参；没有声称这些增益已保证稳定飞行。

@@ -34,8 +34,8 @@ NEUTRAL = [
 ]
 
 
-def fly(name, steps, stride=None):
-    config = load_config(CONFIGS[name], overrides=NEUTRAL)
+def fly(name, steps, stride=None, overrides=()):
+    config = load_config(CONFIGS[name], overrides=[*NEUTRAL, *overrides])
     plant = SyntheticBackend(config)
     loop = MotionControlLoop(config, plant)
     loop.reset()

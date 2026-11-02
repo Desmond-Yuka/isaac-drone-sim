@@ -30,7 +30,15 @@ METRIC_KEYS = (
     "motor_speed_max_rps",
     "saturation_fraction",
     "mean_total_thrust_n",
+    "estimation_position_error_rms_m",
+    "estimation_position_error_max_m",
+    "estimation_velocity_error_rms_m_s",
+    "estimation_tilt_error_rms_deg",
+    "estimation_yaw_error_rms_deg",
+    "estimation_angular_velocity_error_rms_rad_s",
+    "control_position_error_rms_m",
 )
+ESTIMATION_METRIC_KEYS = METRIC_KEYS[-7:]
 
 
 def _telemetry_path(run) -> Path:
@@ -67,8 +75,16 @@ def _tilt_deg(quaternion) -> float:
 
 
 def phase_metrics(records: list[dict]) -> dict:
-    """Metrics over a list of step records (see METRIC_KEYS for names and units)."""
+    """Metrics over a list of step records (see METRIC_KEYS for names and units).
+
+    The estimation metrics (truth − estimate) and the control error (reference −
+    estimate) come from the ``estimation`` record field and are None for runs
+    flown on truth without an estimator (docs/telemetry.md).
+    """
     basics = [record["basic"] for record in records]
+    estimation = [record["estimation"] for record in records if record.get("estimation")]
+    errors = [item["error"] for item in estimation]
+    control = [item["control_error"] for item in estimation if item.get("control_error")]
     times = [basic["sample_time_s"] for basic in basics]
     speeds = [basic["motor_speed_rps"] for basic in basics if basic.get("motor_speed_rps") is not None]
     thrusts = [basic["motor_thrust_applied_n"] for basic in basics if basic.get("motor_thrust_applied_n") is not None]
@@ -91,6 +107,13 @@ def phase_metrics(records: list[dict]) -> dict:
         "motor_speed_max_rps": float(np.max(speeds)) if speeds else None,
         "saturation_fraction": float(np.mean([bool(record.get("allocation_saturated")) for record in records])),
         "mean_total_thrust_n": float(np.mean(np.sum(thrusts, axis=1))) if thrusts else None,
+        "estimation_position_error_rms_m": _rms(error["position_norm_m"] for error in errors),
+        "estimation_position_error_max_m": _max(error["position_norm_m"] for error in errors),
+        "estimation_velocity_error_rms_m_s": _rms(error["velocity_norm_m_s"] for error in errors),
+        "estimation_tilt_error_rms_deg": _rms(math.degrees(error["tilt_error_rad"]) for error in errors),
+        "estimation_yaw_error_rms_deg": _rms(math.degrees(error["yaw_error_rad"]) for error in errors),
+        "estimation_angular_velocity_error_rms_rad_s": _rms(error["angular_velocity_norm_rad_s"] for error in errors),
+        "control_position_error_rms_m": _rms(item["position_norm_m"] for item in control),
     }
 
 
@@ -126,6 +149,9 @@ def compute_metrics(run, loaded=None) -> dict:
         "trajectory": config.get("trajectory", {}).get("kind"),
         "simulated_time_s": records[-1]["basic"]["sample_time_s"],
         "completion_time_s": completion,
+        "state_source": metadata.get("state_source"),
+        "estimation_mode": (metadata.get("estimation") or {}).get("mode"),
+        "estimator": (metadata.get("estimation") or {}).get("kind"),
     }
     return {
         "run": run_info,

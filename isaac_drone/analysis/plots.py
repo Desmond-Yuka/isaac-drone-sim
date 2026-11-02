@@ -5,8 +5,10 @@ view and never write back to them. Each tracked quantity gets one figure: a
 row per component with the ideal (target or command) and the actual value,
 then a row with the ideal-minus-actual error. Disturbance figures (wind, wind
 on the rotors, OU force/torque) are drawn only for runs that recorded that
-model; their bottom row shows the random part instead of an error.
-plot_comparison draws the same set with several runs overlaid. matplotlib is
+model; their bottom row shows the random part instead of an error. Sensor
+readings against the truth they measured and the state estimate against the
+truth are drawn from telemetry.jsonl (``sensors`` / ``estimation`` fields), for
+single runs only. plot_comparison draws the basic set with several runs overlaid. matplotlib is
 optional and imported only when drawing. The object API (no pyplot) needs no
 GUI backend, so this also runs headless and inside the Isaac Sim process.
 """
@@ -19,6 +21,8 @@ import math
 from pathlib import Path
 
 import numpy as np
+
+from isaac_drone.core.rotations import quaternion_to_matrix, rotation_to_rpy, wrap_angle
 
 _AXES = ("x", "y", "z")
 _AXIS_COLORS = ("tab:red", "tab:green", "tab:blue")
@@ -349,7 +353,8 @@ def plot_run(run_dir, output_dir=None) -> list[Path]:
     settings = settings_line(json.loads(config_path.read_text(encoding="utf-8"))) if config_path.is_file() else None
     settings = None if settings is None else wrap_settings(settings)
     subtitle = run.name if settings is None else f"{run.name}\n{settings}"
-    return _write_figures([(run.name, data)], subtitle, phases, output)
+    paths = _write_figures([(run.name, data)], subtitle, phases, output)
+    return [*(paths or ()), *_step_series_figures(run, subtitle, phases, output)]
 
 
 def wrap_settings(settings: str, width: int = 110) -> str:
@@ -662,3 +667,227 @@ def _trajectory(runs, subtitle):
     top.grid(True, alpha=0.3)
     top.legend(loc="best", fontsize=8)
     return figure
+
+
+# ---------------------------------------------------------------------------------------------
+# Sensor readings and state estimates, from telemetry.jsonl.
+# ---------------------------------------------------------------------------------------------
+# (series key, file name, positional and keyword arguments of _tracking); drawn when the series has samples.
+_STEP_SERIES_FIGURES = (
+    (
+        "accelerometer",
+        "sensors_accelerometer.png",
+        (
+            "Accelerometer reading vs true specific force (sensor axes)",
+            "m/s²",
+            0.5,
+            _AXES,
+            "reading_{c}",
+            "true_{c}",
+            "error_{c}",
+        ),
+        {"actual_label": "Reading", "ideal_label": "True specific force", "error_label": "True − reading"},
+    ),
+    (
+        "gyroscope",
+        "sensors_gyroscope.png",
+        (
+            "Gyroscope reading vs true angular velocity (sensor axes)",
+            "deg/s",
+            2.0,
+            _AXES,
+            "reading_{c}",
+            "true_{c}",
+            "error_{c}",
+        ),
+        {"actual_label": "Reading", "ideal_label": "True rate", "error_label": "True − reading", "scale": _DEG},
+    ),
+    (
+        "magnetometer",
+        "sensors_magnetometer.png",
+        ("Magnetometer reading vs true field (sensor axes)", "µT", 1.0, _AXES, "reading_{c}", "true_{c}", "error_{c}"),
+        {"actual_label": "Reading", "ideal_label": "True field (Earth + motors)", "error_label": "True − reading"},
+    ),
+    (
+        "barometer",
+        "sensors_barometer.png",
+        (
+            "Barometric altitude vs true altitude of the sensor",
+            "m",
+            0.5,
+            ("altitude",),
+            "reading_{c}",
+            "true_{c}",
+            "error_{c}",
+        ),
+        {
+            "actual_label": "Reading",
+            "ideal_label": "True altitude",
+            "error_label": "True − reading",
+            "euclidean": False,
+        },
+    ),
+    (
+        "gps_position",
+        "sensors_gps_position.png",
+        ("GPS antenna position (local ENU) vs truth", "m", 0.1, _AXES, "reading_{c}", "true_{c}", "error_{c}"),
+        {"actual_label": "Reading", "ideal_label": "True antenna position", "error_label": "True − reading"},
+    ),
+    (
+        "gps_velocity",
+        "sensors_gps_velocity.png",
+        ("GPS antenna velocity (local ENU) vs truth", "m/s", 0.1, _AXES, "reading_{c}", "true_{c}", "error_{c}"),
+        {"actual_label": "Reading", "ideal_label": "True antenna velocity", "error_label": "True − reading"},
+    ),
+    (
+        "estimation_position",
+        "estimation_position.png",
+        ("Position estimate vs truth (world frame)", "m", 0.1, _AXES, "estimate_{c}", "true_{c}", "error_{c}"),
+        {"actual_label": "Estimate", "ideal_label": "Truth", "error_label": "Truth − estimate"},
+    ),
+    (
+        "estimation_velocity",
+        "estimation_velocity.png",
+        ("Velocity estimate vs truth (world frame)", "m/s", 0.1, _AXES, "estimate_{c}", "true_{c}", "error_{c}"),
+        {"actual_label": "Estimate", "ideal_label": "Truth", "error_label": "Truth − estimate"},
+    ),
+    (
+        "estimation_attitude",
+        "estimation_attitude.png",
+        ("Attitude estimate vs truth (Z-Y-X Euler angles)", "deg", 1.0, _RPY, "estimate_{c}", "true_{c}", "error_{c}"),
+        {
+            "actual_label": "Estimate",
+            "ideal_label": "Truth",
+            "error_label": "Truth − estimate",
+            "norm": "error_angle",
+            "norm_label": "rotation angle",
+            "euclidean": False,
+            "scale": _DEG,
+        },
+    ),
+    (
+        "estimation_angular_velocity",
+        "estimation_angular_velocity.png",
+        (
+            "Angular velocity estimate vs truth (body frame)",
+            "deg/s",
+            2.0,
+            _AXES,
+            "estimate_{c}",
+            "true_{c}",
+            "error_{c}",
+        ),
+        {"actual_label": "Estimate", "ideal_label": "Truth", "error_label": "Truth − estimate", "scale": _DEG},
+    ),
+)
+_READING_KEYS = {
+    "accelerometer": ("imu", "accelerometer_m_s2", "true_specific_force_s_m_s2", _AXES),
+    "gyroscope": ("imu", "gyroscope_rad_s", "true_angular_velocity_s_rad_s", _AXES),
+    "magnetometer": ("magnetometer", "magnetic_field_ut", "true_magnetic_field_s_ut", _AXES),
+    "barometer": ("barometer", "altitude_m", "true_altitude_m", ("altitude",)),
+    "gps_position": ("gps", "position_w_m", "true_position_w_m", _AXES),
+    "gps_velocity": ("gps", "velocity_w_m_s", "true_velocity_w_m_s", _AXES),
+}
+
+
+def load_step_series(run_dir) -> dict[str, dict[str, np.ndarray]]:
+    """Time series of every sensor reading and of the state estimate recorded in telemetry.jsonl.
+
+    Each series is a column dictionary like load_basic_csv's, keyed by the
+    names in _STEP_SERIES_FIGURES: ``sample_time_s`` is the instant the reading
+    describes (a delayed GPS fix keeps its own stamp), ``reading_*``/``true_*``
+    the measured and ideal values and ``error_*`` their ideal-minus-actual
+    difference. Series without samples are left out.
+    """
+    path = Path(run_dir) / "telemetry.jsonl"
+    if not path.is_file():
+        return {}
+    samples = {name: [] for name in (*_READING_KEYS, "estimation")}
+    with path.open(encoding="utf-8") as stream:
+        for line in stream:
+            record = json.loads(line)
+            if record.get("event") is not None:
+                continue
+            sensors = record.get("sensors") or {}
+            for name, (sensor, reading_key, true_key, _) in _READING_KEYS.items():
+                reading = sensors.get(sensor)
+                if reading is not None:
+                    samples[name].append((reading["time_s"], reading[reading_key], reading[true_key]))
+            estimation = record.get("estimation")
+            if estimation is not None:
+                samples["estimation"].append((estimation["state"], record["post_step_state"], estimation["error"]))
+    series = {}
+    for name, (_, _, _, components) in _READING_KEYS.items():
+        if samples[name]:
+            series[name] = _reading_columns(samples[name], components)
+    if samples["estimation"]:
+        series.update(_estimation_columns(samples["estimation"]))
+    return series
+
+
+def _reading_columns(rows, components):
+    times = np.array([float(time) for time, _, _ in rows])
+    readings = np.array([np.atleast_1d(np.asarray(reading, dtype=float)) for _, reading, _ in rows])
+    truths = np.array([np.atleast_1d(np.asarray(truth, dtype=float)) for _, _, truth in rows])
+    data = {"sample_time_s": times}
+    for index, component in enumerate(components):
+        data[f"reading_{component}"] = readings[:, index]
+        data[f"true_{component}"] = truths[:, index]
+        data[f"error_{component}"] = truths[:, index] - readings[:, index]
+    return data
+
+
+def _estimation_columns(rows):
+    times = np.array([float(estimate["time_s"]) for estimate, _, _ in rows])
+    columns = {}
+    for prefix, key in (("estimate", 0), ("true", 1)):
+        states = [row[key] for row in rows]
+        for field, name in (
+            ("position_w", "position"),
+            ("linear_velocity_w", "velocity"),
+            ("angular_velocity_b", "rate"),
+        ):
+            values = np.array([state[field] for state in states], dtype=float)
+            for index, axis in enumerate(_AXES):
+                columns[f"{name}_{prefix}_{axis}"] = values[:, index]
+        rpy = np.array([rotation_to_rpy(quaternion_to_matrix(state["quaternion_wxyz"])) for state in states])
+        for index, angle in enumerate(_RPY):
+            columns[f"attitude_{prefix}_{angle}"] = rpy[:, index]
+    errors = [row[2] for row in rows]
+    series = {}
+    for name, key in (
+        ("position", "position_w_m"),
+        ("velocity", "velocity_w_m_s"),
+        ("rate", "angular_velocity_b_rad_s"),
+    ):
+        data = {"sample_time_s": times}
+        error = np.array([item[key] for item in errors], dtype=float)
+        for index, axis in enumerate(_AXES):
+            data[f"estimate_{axis}"] = columns[f"{name}_estimate_{axis}"]
+            data[f"true_{axis}"] = columns[f"{name}_true_{axis}"]
+            data[f"error_{axis}"] = error[:, index]
+        series[f"estimation_{'angular_velocity' if name == 'rate' else name}"] = data
+    attitude = {"sample_time_s": times}
+    for angle in _RPY:
+        attitude[f"estimate_{angle}"] = columns[f"attitude_estimate_{angle}"]
+        attitude[f"true_{angle}"] = columns[f"attitude_true_{angle}"]
+        attitude[f"error_{angle}"] = wrap_angle(
+            columns[f"attitude_true_{angle}"] - columns[f"attitude_estimate_{angle}"]
+        )
+    attitude["error_angle"] = np.array([item["attitude_error_angle_rad"] for item in errors], dtype=float)
+    series["estimation_attitude"] = attitude
+    return series
+
+
+def _step_series_figures(run, subtitle, phases, output):
+    """Sensor and estimation figures of one run; nothing when the run recorded neither."""
+    series = load_step_series(run)
+    paths = []
+    output.mkdir(parents=True, exist_ok=True)
+    for key, name, arguments, options in _STEP_SERIES_FIGURES:
+        data = series.get(key)
+        if data is None or not len(data["sample_time_s"]):
+            continue
+        paths.append(output / name)
+        _tracking([(Path(run).name, data)], subtitle, phases, *arguments, **options).savefig(paths[-1], dpi=150)
+    return paths

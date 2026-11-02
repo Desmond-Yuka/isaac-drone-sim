@@ -76,6 +76,10 @@ class SyntheticBackend:
     plant, not assumptions of the Isaac Lab backend.
     """
 
+    # RK4 rotates the body wrench with the attitude of each stage, so the interval-average
+    # specific force pairs with the midpoint attitude (see sensors.truth.StepTruth).
+    specific_force_attitude_pairing = "midpoint"
+
     def __init__(self, config: dict, parameters: SyntheticPlantParameters | None = None):
         self.names = list(ROTOR_NAMES)
         self.config = deepcopy(config)

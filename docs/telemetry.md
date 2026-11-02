@@ -3,7 +3,7 @@
 导师要求的 position、velocity、acceleration、motor speeds、force、torque、position error 均有对应记录。运行一次仿真后，在 `runs/<月日-时分>_<实验名>_<后端>[_video]/`（命名规则见 README「运行目录」）保存：
 
 - `basic.csv`：每行一个已完成物理步，列名包含分量和单位，可用于 Excel、MATLAB、Python 绘图。
-- `telemetry.jsonl`：保留完整的步前/步后状态、控制输入、实际执行器状态和基础数据。
+- `telemetry.jsonl`：保留完整的步前/步后状态、控制输入、实际执行器状态和基础数据；另有每步的合成传感器读数 `sensors` 和状态估计 `estimation`（见「传感器读数与状态估计」）。
 - `telemetry_schema.json`：CSV 列与 JSON 字段的对应关系、单位、参考系、采样时间与来源说明。
 - `config.json` / `metadata.json`：实际配置（已展开 `extends` 与 `--set`）、后端描述、USD 层哈希（isaaclab）、机型属性、模型边界、任务阶段时间表 `mission_phases`、git commit 与命令行 `provenance`。
 - `metrics.json`：由 `telemetry.jsonl` 计算的整体和分阶段指标（`isaac_drone/analysis/metrics.py`），供 `summarize`、`compare`、`sweep` 共用。
@@ -68,6 +68,43 @@
 
 有风作用到旋翼时，`motor_thrust_applied_n` 是实际加在桨叶上的推力 kf·(RPS + 偏移)²，所以 `motor_thrust_error_n`、`force_error_b_n`、`torque_error_b_nm` 里也包含风对旋翼的影响；`motor_speed_rps` 仍是电机状态本身。
 
+## 传感器读数与状态估计（JSONL）
+
+每条步记录多两个顶层字段，只在 `telemetry.jsonl` 里，不进 `basic.csv`（基础 CSV 仍是导师要求的运动与动力数据）。配置见 docs/configuration.md「传感器与状态估计」，模型与公式见 docs/architecture.md 第 5 节。
+
+### `sensors`
+
+`sensors.enabled: false` 时为 `null`；否则是四个键 `imu`、`magnetometer`、`barometer`、`gps`，每个键在本步没有读数发布时为 `null`。读数由本步步首/步末的仿真真值合成，在步末生成，并在下一步控制器读状态之前交给状态提供者（`update`），所以估计器永远只看到过去的数据。
+
+| 传感器 | 读数字段 | 同时记录的真值 |
+|---|---|---|
+| `imu`（默认 200 Hz） | `accelerometer_m_s2`（传感器系比力，静止时约 (0, 0, +9.81)）、`gyroscope_rad_s`（步末机体角速度） | `true_specific_force_s_m_s2`、`true_angular_velocity_s_rad_s` |
+| `magnetometer`（50 Hz） | `magnetic_field_ut`（传感器系，µT） | `true_magnetic_field_s_ut`（地磁 + 电机干扰）、`motor_interference_s_ut` |
+| `barometer`（50 Hz） | `altitude_m`（安装点世界 z） | `true_altitude_m` |
+| `gps`（10 Hz，延迟 0.12 s） | `position_w_m`、`velocity_w_m_s`（天线的本地 ENU 位置/速度，不是经纬度） | `true_position_w_m`、`true_velocity_w_m_s` |
+
+每个读数带自己的 `time_s`：它描述的时刻，即采样那一步的步末。有延迟的传感器（默认只有 GPS）在采样后 `delay_s/dt` 步才出现在记录里，这时读数的 `time_s` 比记录的 `post_step_state.time_s` 早一个延迟，画图和估计器都应使用读数自己的 `time_s`。`true_*` 是无噪声的理想值，用来画「读数 vs 真值」图和算传感器误差，估计器不应读取它们。
+
+### `estimation`
+
+`estimation.mode: truth` 且没有注入状态提供者时为 `null`。否则：
+
+| 字段 | 含义 |
+|---|---|
+| `kind` / `mode` / `used_by_controller` | 估计器类型（目前只有 `passthrough`），模式（`shadow`、`closed_loop`，注入的提供者为 `injected`），控制器是否使用了这个状态 |
+| `state` | 步末估计状态（`time_s`、`position_w`、`quaternion_wxyz`、`linear_velocity_w`、`angular_velocity_b`），与 `post_step_state` 同一时刻 |
+| `error` | **估计误差 = 真值 − 估计值**：`position_w_m`、`velocity_w_m_s`、`angular_velocity_b_rad_s` 及各自模长；姿态误差拆成旋转向量 `attitude_error_rad`（Log(R_估计ᵀ R_真值)）、其角度 `attitude_error_angle_rad`、倾角误差 `tilt_error_rad`（两个机体 Z 轴夹角）和偏航误差 `yaw_error_rad` |
+| `control_error` | **控制误差 = 参考值 − 估计值**：`position_w_m`、`velocity_w_m_s` 及模长，参考值是本步持有的目标 |
+| `covariance_diag` / `nis` | 估计器给出的协方差对角线和 NIS；`passthrough` 为 `null` |
+
+三种误差的关系：`basic.position_error_w_m` 是**总误差 = 参考值 − 真值**，所以
+
+$$
+\text{总误差} = \text{控制误差} - \text{估计误差}
+$$
+
+`metrics.json` 按阶段给出 `estimation_position_error_rms_m` / `_max_m`、`estimation_velocity_error_rms_m_s`、`estimation_tilt_error_rms_deg`、`estimation_yaw_error_rms_deg`、`estimation_angular_velocity_error_rms_rad_s` 和 `control_position_error_rms_m`；没有估计记录时为 `null`。`summarize` 在表格后加一行估计误差汇总，运行卡片的指标表只在有估计记录时多出这几行。顶层 `state_source` 说明控制器用的状态：`simulation_truth`、`estimate:<kind>` 或 `injected_state_provider`。
+
 ## 图像
 
 每次飞行结束后自动在 `runs/<运行目录>/plots/` 生成英文 PNG；CSV/JSONL 仍是原始数据，图像只是派生视图。标题第二行是运行目录名，第三行是物理设置（只列与理想对象不同的项，如 `OU force (1,0,0)±0.5 N τ 1 s; mass ×1.2`），图片单独拿出来也能看出是哪次运行。也可以对任意一次运行（包括拷回本地的目录）重新生成，只需 NumPy 和 matplotlib：
@@ -88,6 +125,10 @@ python -m isaac_drone plot runs/<运行目录>   # 指定运行
 | `rotor_wind.png` | 每桨等效转速 vs 电机转速，末行为风造成的转速偏移。仅开了 `rotor_wind.axial` 的运行才画 |
 | `wind_drag.png` | 桨盘平面内的风阻力（机体系）。仅开了 `rotor_wind.inplane_drag` 的运行才画 |
 | `ou_force.png` / `ou_torque.png` | 旧的质心 OU 随机力（世界系）/ 力矩（机体系）：实际施加值 vs 均值，末行为 OU 随机部分。仅开了 `ou_wrench` 且该项不全为 0 的运行才画 |
+| `sensors_accelerometer.png` / `sensors_gyroscope.png` | IMU 读数 vs 真实比力 / 真实角速度（传感器系），末行为真值 − 读数。横轴是读数自己的时刻；仅开了传感器的运行才画 |
+| `sensors_magnetometer.png` / `sensors_barometer.png` | 磁力计读数 vs 真实磁场（地磁 + 电机干扰）；气压高度 vs 安装点真实高度 |
+| `sensors_gps_position.png` / `sensors_gps_velocity.png` | GPS 天线位置/速度读数 vs 真值（本地 ENU），按读数时刻对齐，延迟不体现在横轴上 |
+| `estimation_position.png` / `estimation_velocity.png` / `estimation_attitude.png` / `estimation_angular_velocity.png` | 估计值 vs 真值，末行为估计误差（真值 − 估计值）；姿态图的误差模长是旋转角。仅 `shadow` / `closed_loop`（或注入了状态提供者）的运行才画 |
 
 竖虚线为任务阶段分界（取自 `metadata.json` 的 `mission_phases`，例如 spin_up / takeoff / helix / hold；旧版运行目录按原先的 delay / takeoff / helix / hold 边界）。旧版日志缺少的误差列会在画图时用"理想 − 实际"补算，缺少理想值的量只画实际值。
 
@@ -121,7 +162,7 @@ acceleration_w = (velocity_w_end - velocity_w_start) / interval_dt
 
 计算使用本步两端的实际仿真质心速度，不使用目标加速度、估计器输出或上一次写入文件的速度。因此即使改变日志降采样频率，加速度也不会误用错误时间间隔。复位后的第一条记录使用复位状态和第一次物理步结束状态，不补一个虚构零值。
 
-这是**区间平均运动加速度**，包含重力在运动中造成的影响，不是 IMU 比力。若要模拟加速度计，还需要传感器坐标、重力处理、偏置和噪声模型。
+这是**区间平均运动加速度**，包含重力在运动中造成的影响，不是 IMU 比力。加速度计读数由传感器层另行合成（`sensors.imu`）：比力 `f_b = R_pairᵀ(Δv/Δt − g_w)` 加杆臂项，再过误差模型，见「传感器读数与状态估计」和 docs/architecture.md 第 5 节。
 
 `acceleration_native_w_m_s2` 独立记录 PhysX 提供的加速度，使用各刚体质量加权到整机质心；只有求解器数据可用且已经完成相应物理步时才记录。未初始化/不可用为 null，CSV 中为空，不把它当作零。`acceleration_native_source` 标明来源。两种加速度的采样/数值定义不同，不能保证逐点完全相等。
 

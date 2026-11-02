@@ -9,7 +9,9 @@ from .loader import apply_override, load_yaml_tree, merge
 from .schema import (
     CONFIG_DIR,
     DEFAULT_CONFIG,
+    DEFAULT_ESTIMATION,
     DEFAULT_RECORDING,
+    DEFAULT_SENSORS,
     HELIX_CONFIG,
     REPO_ROOT,
     SCHEMA_VERSION,
@@ -22,7 +24,9 @@ from .schema import (
 __all__ = [
     "CONFIG_DIR",
     "DEFAULT_CONFIG",
+    "DEFAULT_ESTIMATION",
     "DEFAULT_RECORDING",
+    "DEFAULT_SENSORS",
     "HELIX_CONFIG",
     "REPO_ROOT",
     "SCHEMA_VERSION",

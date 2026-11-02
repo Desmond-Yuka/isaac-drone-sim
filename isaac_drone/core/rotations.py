@@ -172,3 +172,74 @@ def desired_attitude_kinematics(
     omega = vee(rotation.T @ derivative)
     alpha = vee(derivative.T @ derivative + rotation.T @ second_derivative)
     return rotation, omega, alpha
+
+
+def rotation_exp(rotation_vector: np.ndarray) -> np.ndarray:
+    """so(3) exponential map: the rotation by ``|v|`` radians about ``v``, via Rodrigues' formula.
+
+    Small angles use the series expansion of the coefficients so that the map is
+    smooth through zero; ``rotation_log(rotation_exp(v)) == v`` for ``|v| < pi``.
+    """
+    v = finite_array(rotation_vector, (3,), "rotation_vector")
+    angle = float(np.linalg.norm(v))
+    k = hat(v)
+    if angle < 1e-6:
+        a = 1.0 - angle * angle / 6.0
+        b = 0.5 - angle * angle / 24.0
+    else:
+        a = np.sin(angle) / angle
+        b = (1.0 - np.cos(angle)) / (angle * angle)
+    return np.eye(3) + a * k + b * (k @ k)
+
+
+def quaternion_multiply(first_wxyz: np.ndarray, second_wxyz: np.ndarray) -> np.ndarray:
+    """Hamilton product ``p ⊗ q`` (scalar first); composes rotations like ``R(p) @ R(q)``."""
+    p = finite_array(first_wxyz, (4,), "first_wxyz")
+    q = finite_array(second_wxyz, (4,), "second_wxyz")
+    return np.array(
+        [
+            p[0] * q[0] - p[1] * q[1] - p[2] * q[2] - p[3] * q[3],
+            p[0] * q[1] + p[1] * q[0] + p[2] * q[3] - p[3] * q[2],
+            p[0] * q[2] - p[1] * q[3] + p[2] * q[0] + p[3] * q[1],
+            p[0] * q[3] + p[1] * q[2] - p[2] * q[1] + p[3] * q[0],
+        ]
+    )
+
+
+def quaternion_slerp(start_wxyz: np.ndarray, end_wxyz: np.ndarray, fraction: float) -> np.ndarray:
+    """Spherical linear interpolation along the shorter arc; ``fraction`` 0 gives start, 1 gives end.
+
+    The result is a unit quaternion with the sign of the start; nearly parallel
+    inputs fall back to normalized linear interpolation.
+    """
+    q0 = finite_array(start_wxyz, (4,), "start_wxyz")
+    q1 = finite_array(end_wxyz, (4,), "end_wxyz")
+    t = finite_scalar(fraction, "fraction")
+    if not 0.0 <= t <= 1.0:
+        raise ValueError("fraction must lie in [0, 1]")
+    for q in (q0, q1):
+        if not np.isclose(np.linalg.norm(q), 1.0, rtol=0.0, atol=1e-6):
+            raise ValueError("slerp needs unit quaternions")
+    q0, q1 = q0 / np.linalg.norm(q0), q1 / np.linalg.norm(q1)
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:
+        q1, dot = -q1, -dot
+    if dot > 1.0 - 1e-9:
+        result = (1.0 - t) * q0 + t * q1
+        return result / np.linalg.norm(result)
+    theta = np.arccos(min(dot, 1.0))
+    sin_theta = np.sin(theta)
+    return (np.sin((1.0 - t) * theta) * q0 + np.sin(t * theta) * q1) / sin_theta
+
+
+def rpy_to_rotation(roll_rad: float, pitch_rad: float, yaw_rad: float) -> np.ndarray:
+    """Body-to-world rotation of Z-Y-X Euler angles (yaw about Z first); inverse of ``rotation_to_rpy``."""
+    roll, pitch, yaw = (finite_scalar(v, n) for v, n in ((roll_rad, "roll"), (pitch_rad, "pitch"), (yaw_rad, "yaw")))
+    cr, sr, cp, sp, cy, sy = np.cos(roll), np.sin(roll), np.cos(pitch), np.sin(pitch), np.cos(yaw), np.sin(yaw)
+    return np.array(
+        [
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr],
+        ]
+    )

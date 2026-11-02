@@ -795,6 +795,14 @@ def telemetry_schema():
                 "encoding": "UTF-8",
                 "nonfinite_numbers": "rejected",
                 "records": "All original records, including events and legacy records without basic",
+                "step_record_fields": {
+                    "sensors": "Per-sensor reading mapping (imu, magnetometer, barometer, gps) released at this step, "
+                    "each null when none is due; a reading carries its own time_s and the true_* value it measured. "
+                    "null when no sensors are configured.",
+                    "estimation": "State provider output at the step end with error (truth − estimate), control_error "
+                    "(reference − estimate), covariance_diag and nis; null when the controller flies on truth without "
+                    "an estimator.",
+                },
             },
             "basic.csv": {
                 "format": "CSV",

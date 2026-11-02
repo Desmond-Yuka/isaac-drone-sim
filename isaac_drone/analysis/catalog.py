@@ -32,6 +32,21 @@ _FIGURES = (
     "rotor_thrust",
     "force",
     "torque",
+    "wind",
+    "rotor_wind",
+    "wind_drag",
+    "ou_force",
+    "ou_torque",
+    "sensors_accelerometer",
+    "sensors_gyroscope",
+    "sensors_magnetometer",
+    "sensors_barometer",
+    "sensors_gps_position",
+    "sensors_gps_velocity",
+    "estimation_position",
+    "estimation_velocity",
+    "estimation_attitude",
+    "estimation_angular_velocity",
 )
 _MISMATCH = (
     ("mass_ratio", "mass"),
@@ -48,6 +63,15 @@ _CARD_METRICS = (
     ("tilt_max_deg", "Tilt max [deg]", 1),
     ("speed_max_m_s", "Speed max [m/s]", 2),
     ("saturation_fraction", "Motor saturation fraction", 3),
+)
+# Shown only when the run recorded an estimate (estimation.mode shadow or closed_loop, or an injected provider).
+_ESTIMATION_CARD_METRICS = (
+    ("estimation_position_error_rms_m", "Estimation error RMS, position [m]", 4),
+    ("estimation_position_error_max_m", "Estimation error max, position [m]", 4),
+    ("estimation_velocity_error_rms_m_s", "Estimation error RMS, velocity [m/s]", 4),
+    ("estimation_tilt_error_rms_deg", "Estimation error RMS, tilt [deg]", 3),
+    ("estimation_yaw_error_rms_deg", "Estimation error RMS, yaw [deg]", 3),
+    ("control_position_error_rms_m", "Control error RMS (reference − estimate) [m]", 4),
 )
 _TABLE = (
     ("started", "Started"),
@@ -211,7 +235,39 @@ def settings_line(config: dict) -> str | None:
     seed = (config.get("simulation") or {}).get("seed")
     if seed:
         parts.append(f"seed {seed}")
+    estimation = config.get("estimation") or {}
+    if estimation.get("mode") == "closed_loop":
+        parts.append(f"flying on {estimation.get('kind', '?')} estimate")
     return "; ".join(parts) or "ideal (no disturbance, no model mismatch)"
+
+
+def _sensors_text(sensors: dict) -> str:
+    """``IMU 200 Hz, magnetometer 50 Hz, barometer 50 Hz, GPS 10 Hz (rtk, 0.12 s delay)``; ``off`` when disabled."""
+    if not sensors or not sensors.get("enabled"):
+        return "off"
+    labels = (("imu", "IMU"), ("magnetometer", "magnetometer"), ("barometer", "barometer"), ("gps", "GPS"))
+    parts = []
+    for key, label in labels:
+        sensor = sensors.get(key) or {}
+        if not sensor.get("enabled"):
+            continue
+        text = f"{label} {_g(sensor.get('rate_hz'))} Hz"
+        notes = [sensor["profile"]] if key == "gps" and sensor.get("profile") else []
+        if sensor.get("delay_s"):
+            notes.append(f"{sensor['delay_s']:g} s delay")
+        if key == "imu" and (sensor.get("vibration") or {}).get("enabled"):
+            notes.append("vibration")
+        parts.append(text + (f" ({', '.join(notes)})" if notes else ""))
+    return ", ".join(parts) or "none enabled"
+
+
+def _estimation_text(estimation: dict) -> str:
+    mode, kind = estimation.get("mode", "truth"), estimation.get("kind", "?")
+    if mode == "closed_loop":
+        return f"closed loop: controller flies on the {kind} estimate"
+    if mode == "shadow":
+        return f"shadow: {kind} runs and is recorded, controller flies on truth"
+    return "truth: controller flies on simulation truth"
 
 
 def _settings_rows(config: dict) -> list[tuple[str, str]]:
@@ -262,6 +318,9 @@ def _settings_rows(config: dict) -> list[tuple[str, str]]:
     else:
         rows.append(("Motor model (first-order rotor-speed lag)", "off: rotor speed = command, no lag"))
     rows.append(("Seed", str((config.get("simulation") or {}).get("seed", "?"))))
+    if "sensors" in config or "estimation" in config:
+        rows.append(("Sensors (synthetic readings)", _sensors_text(config.get("sensors") or {})))
+        rows.append(("State estimation", _estimation_text(config.get("estimation") or {})))
     return rows
 
 
@@ -393,7 +452,9 @@ def _metrics_section(metrics: dict) -> list[str]:
     columns = [("overall", overall), *(metrics.get("phases") or {}).items()]
     lines = ["", "## Metrics", "", "| | " + " | ".join(name for name, _ in columns) + " |"]
     lines.append("|---" * (len(columns) + 1) + "|")
-    for key, label, digits in _CARD_METRICS:
+    rows = [*_CARD_METRICS]
+    rows += [row for row in _ESTIMATION_CARD_METRICS if any(values.get(row[0]) is not None for _, values in columns)]
+    for key, label, digits in rows:
         lines.append(f"| {label} | " + " | ".join(_number(values.get(key), digits) for _, values in columns) + " |")
     return lines
 

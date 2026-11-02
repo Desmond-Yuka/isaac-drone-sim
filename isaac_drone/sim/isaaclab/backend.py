@@ -376,6 +376,10 @@ def _ground_plane_height_m(stage, root_path):
 class ARLBackend:
     """A rigid assembly of fixed links, with four native ARL motor models."""
 
+    # External forces are applied in the body axes of the step start and held through the
+    # PhysX step, so the interval-average specific force pairs with the start attitude.
+    specific_force_attitude_pairing = "step_start"
+
     def __init__(self, sim, robot, config):
         self.sim, self.robot, self.config = sim, robot, copy.deepcopy(config)
         # Multirotor replaces the parent's data container after initialization.

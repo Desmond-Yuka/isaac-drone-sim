@@ -18,6 +18,8 @@ from isaac_drone.control.allocation import AllocationResult
 from isaac_drone.core.types import MassProperties, Wrench
 from isaac_drone.core.validation import finite_array
 from isaac_drone.effects import RotorGeometry, build_effects
+from isaac_drone.estimation import DEFAULT_ESTIMATION, build_state_provider, control_errors, estimation_errors
+from isaac_drone.sensors import DEFAULT_ATTITUDE_PAIRING, build_sensor_suite
 from isaac_drone.sim.actuation import thrust_to_motor_speeds
 from isaac_drone.telemetry.measurements import build_basic_record
 from isaac_drone.trajectories import SegmentedTrajectory, build_trajectory
@@ -43,12 +45,30 @@ class MotionControlLoop:
     passes per-rotor speed offsets to the backend. During the launch spin-up
     (``vehicle.launch.spin_up_s``) the reference holds the start pose and motor
     commands are scaled by a smooth 0..1 envelope; the trajectory starts after it.
+
+    Sensors (``sensors``) sample the truth at the end of every physics step and
+    hand their readings to the state provider before the next control step. The
+    provider is the backend in ``estimation.mode: truth``, otherwise the
+    ``estimation.kind`` provider; the controller flies on its state only in
+    ``closed_loop`` (or when a provider is injected). ``shadow`` records the
+    estimate against the truth while the controller keeps flying on truth.
     """
 
     def __init__(self, config, backend, *, trajectory=None, controller=None, effects=None, state_provider=None):
         self.config = deepcopy(config)
         self.backend = backend
-        self.state_provider = state_provider or backend
+        gravity = np.asarray(config["simulation"]["gravity"], dtype=float)
+        self.sensors = build_sensor_suite(config.get("sensors"), config["simulation"]["dt"], gravity)
+        estimation = config.get("estimation") or DEFAULT_ESTIMATION
+        self.estimation_mode = estimation["mode"]
+        self.estimator_kind = estimation["kind"]
+        self._injected_provider = state_provider
+        if state_provider is not None:
+            self.state_provider = state_provider
+        elif self.estimation_mode == "truth":
+            self.state_provider = backend
+        else:
+            self.state_provider = build_state_provider(estimation, backend)
         self.trajectory = trajectory or build_trajectory(config["trajectory"])
         self.limits = FlightLimits.from_config(config["limits"])
         self._injected_controller = controller
@@ -65,6 +85,20 @@ class MotionControlLoop:
         self.feasibility = None
         self._pending = False
         self._initialized = False
+
+    @property
+    def controller_uses_estimate(self) -> bool:
+        """True when the controller flies on the state provider instead of the backend truth."""
+        return self._injected_provider is not None or self.estimation_mode == "closed_loop"
+
+    @property
+    def state_source(self) -> str:
+        """Where the controller's state comes from, as written into records and metadata."""
+        if self._injected_provider is not None:
+            return "injected_state_provider"
+        if self.estimation_mode == "closed_loop":
+            return f"estimate:{self.estimator_kind}"
+        return "simulation_truth"
 
     def _nominal_mass(self) -> MassProperties:
         truth = self.backend.mass_properties()
@@ -116,6 +150,10 @@ class MotionControlLoop:
         assert_flight_ready(self.config, matrix)
         if hasattr(self.backend, "assert_control_compatible"):
             self.backend.assert_control_compatible()
+        if self.sensors is not None:
+            pairing = getattr(self.backend, "specific_force_attitude_pairing", DEFAULT_ATTITUDE_PAIRING)
+            self.sensors.bind_vehicle(self.backend.mass_properties(), pairing)
+            self.sensors.reset(self.config["simulation"]["seed"])
         parameters = self._nominal_motor()
         gravity = np.array(self.config["simulation"]["gravity"], dtype=float)
         nominal_matrix = matrix.copy()
@@ -151,7 +189,7 @@ class MotionControlLoop:
             self.effects.bind_rotor_geometry(self._rotor_geometry())
         # A ground launch anchors the reference at the physical placement (backend truth); an
         # airborne start anchors it at the state the controller observes (possibly an estimate).
-        anchor = self.backend if launch["from_ground"] else self.state_provider
+        anchor = self.state_provider if self.controller_uses_estimate and not launch["from_ground"] else self.backend
         initial = anchor.read_state(0.0)
         self.trajectory.reset(initial, start_time_s=initial.time_s + self.spin_up_s)
         self._plan_and_check()
@@ -219,6 +257,13 @@ class MotionControlLoop:
             "controller_kind": self.controller_kind,
             "trajectory_feasibility": self.feasibility,
             "mission_phases": self.phase_schedule(),
+            "state_source": self.state_source,
+            "sensors": None if self.sensors is None else self.sensors.describe(),
+            "estimation": {
+                "mode": self.estimation_mode,
+                "kind": self.estimator_kind,
+                "controller_uses_estimate": self.controller_uses_estimate,
+            },
         }
 
     def phase_schedule(self) -> list[tuple[float, str]]:
@@ -260,7 +305,7 @@ class MotionControlLoop:
             raise RuntimeError("reset first, and finish each prepared physics step exactly once")
         truth = self.backend.read_state(self.time_s)
         self._pre_step_truth = deepcopy(truth)
-        state = truth if self.state_provider is self.backend else self.state_provider.read_state(self.time_s)
+        state = self.state_provider.read_state(self.time_s) if self.controller_uses_estimate else truth
         if self.step_index % self.decimation == 0:
             self.setpoint = self.reference(self.time_s)
             self._reference_sample_time_s = self.time_s
@@ -322,7 +367,7 @@ class MotionControlLoop:
         self._record = {
             "step": self.step_index,
             "time_s": self.time_s,
-            "state_source": "simulation_truth" if self.state_provider is self.backend else "injected_state_provider",
+            "state_source": self.state_source,
             "state": asdict(state),
             "setpoint": asdict(self.setpoint),
             "mission_phase": phase,
@@ -362,6 +407,15 @@ class MotionControlLoop:
         telemetry = self.backend.telemetry()
         self._record["post_step_state"] = asdict(truth)
         self._record["backend"] = telemetry
+        readings = None
+        if self.sensors is not None:
+            readings = self.sensors.sample(self.step_index, self._pre_step_truth, truth, telemetry)
+        if self.state_provider is not self.backend:
+            update = getattr(self.state_provider, "update", None)
+            if update is not None:
+                update(readings)
+        self._record["sensors"] = readings
+        self._record["estimation"] = self._estimation_record(truth)
         if self.mission is not None:
             self._record["mission"] = self.mission.update(truth, self.reference(truth.time_s), self.phase(truth.time_s))
         else:
@@ -387,3 +441,27 @@ class MotionControlLoop:
         )
         self._pending = False
         return deepcopy(self._record)
+
+    def _estimation_record(self, truth):
+        """Estimate at the step end with its errors against the truth and the held reference; None on truth."""
+        if self.state_provider is self.backend:
+            return None
+        estimate = self.state_provider.read_state(truth.time_s)
+        if not np.isclose(estimate.time_s, truth.time_s, rtol=0.0, atol=1e-12):
+            raise ValueError("The state provider must report the state at the queried loop time")
+        diagnostics = getattr(self.state_provider, "diagnostics", None)
+        extra = diagnostics() if diagnostics is not None else {}
+        if self._injected_provider is not None:
+            kind, mode = f"injected:{type(self.state_provider).__name__}", "injected"
+        else:
+            kind, mode = self.estimator_kind, self.estimation_mode
+        return {
+            "kind": kind,
+            "mode": mode,
+            "used_by_controller": self.controller_uses_estimate,
+            "state": asdict(estimate),
+            "error": estimation_errors(truth, estimate),
+            "control_error": control_errors(self._interval_reference, estimate),
+            "covariance_diag": extra.get("covariance_diag"),
+            "nis": extra.get("nis"),
+        }

@@ -175,3 +175,87 @@ recording:
   width: 1280                  # H.264 视频宽高必须为正偶数
   height: 720
   cameras: [overview, follow, top]  # 全景、动态跟随、俯视；可按需选择其中的机位
+
+sensors:                        # 由每个物理步的真值合成传感器读数，记录在 telemetry.jsonl 的 sensors 字段；误差模型复刻 MATLAB imuSensor / altimeterSensor / gpsSensor
+  enabled: true                 # 关掉则不生成读数；随机数流独立于风场/OU 扰动，开关传感器不改变飞行结果。没有本段的旧配置默认关闭
+  imu:                          # ICM-42688-P（Pixhawk 6C）；装在 base_link 原点，杆臂 r = −com_b 自动计算
+    enabled: true
+    rate_hz: 200                # 采样率必须整除物理步频 1/dt
+    delay_s: 0.0                # 延迟取 dt 的整数倍
+    position_b_m: [0.0, 0.0, 0.0]        # 相对根链接原点，机体系
+    orientation_rpy_rad: [0.0, 0.0, 0.0] # 传感器系相对机体系的 Z-Y-X 欧拉角
+    temperature_c: 25.0         # 25 °C 为标称温度，温漂和温度标度项为 0
+    accelerometer:              # accelparams；手册单边谱密度对应 noise_type: double-sided，每样本 σ = 密度·√(fs/2)
+      measurement_range: 156.9  # ±16 g [m/s²]；null = 不饱和
+      resolution: 0.004788      # 16 g / 2^15 [m/s²/LSB]；0 = 不量化
+      constant_bias: [0.10, -0.08, 0.12] # 零偏 [m/s²]（手册 ±40 mg 内取值）
+      axes_misalignment: 0.5    # 安装误差矩阵 [%]：标量 = 全部非对角元（交叉轴），对角 100；也可写 3 元向量或 3×3 矩阵
+      noise_density: 0.000687   # 70 µg/√Hz [m/s²/√Hz]
+      bias_instability: 0.0003  # ≈30 µg [m/s²]，高斯-马尔可夫平稳标准差（MATLAB 用 1/f 滤波，这里用相关时间刻画）
+      bias_instability_time_constant_s: 100.0
+      random_walk: 0.0          # [m/s²·√Hz]
+      noise_type: double-sided  # double-sided: σ = 密度·√(fs/2)；single-sided: σ = 密度·√fs
+      temperature_bias: 0.0015  # 0.15 mg/°C [m/s²/°C]
+      temperature_scale_factor: 0.006 # [%/°C]
+    gyroscope:                  # gyroparams
+      measurement_range: 34.9   # ±2000 °/s [rad/s]
+      resolution: 0.001065      # 2000 °/s / 2^15 [rad/s/LSB]
+      constant_bias: [0.003, -0.002, 0.004] # [rad/s]（手册 ±0.5 °/s 内取值）
+      axes_misalignment: 0.5
+      noise_density: 0.0000489  # 2.8 m°/s/√Hz [rad/s/√Hz]
+      bias_instability: 0.000015 # ≈3 °/h [rad/s]
+      bias_instability_time_constant_s: 100.0
+      random_walk: 0.0          # [rad/s·√Hz]
+      noise_type: double-sided
+      temperature_bias: 0.0000873 # 0.005 °/s/°C [rad/s/°C]
+      temperature_scale_factor: 0.005 # [%/°C]
+      acceleration_bias: 0.00018 # g 敏感性 ≈0.1 °/s/g [(rad/s)/(m/s²)]，乘传感器系比力
+    vibration:                  # MATLAB 之外：旋翼振动的白噪声，标准差按总推力/重量缩放（悬停时为所给值）
+      enabled: true
+      accelerometer_std_m_s2: [0.2, 0.2, 0.3]
+      gyroscope_std_rad_s: [0.01, 0.01, 0.01]
+      scale_with_thrust: true
+  magnetometer:                 # IST8310；读数 = 机体系地磁场 + 电机电流干扰，再过 magparams 误差链
+    enabled: true
+    rate_hz: 50
+    delay_s: 0.0
+    orientation_rpy_rad: [0.0, 0.0, 0.0]
+    temperature_c: 25.0
+    field_w_ut: [0.0, 13.0, -50.0]  # 世界系（ENU）地磁场常量 [µT]，示例为北欧高纬度量级；按实验地点修改
+    motor_interference_b_ut_per_n15: [0.05, 0.03, 0.10] # 电机电流干扰 [µT/N^1.5]，乘 Σ T_i^1.5（applied_thrust_n）；演示量级，需标定
+    model:
+      measurement_range: 1600.0 # [µT]
+      resolution: 0.3           # [µT/LSB]
+      constant_bias: [0.5, -0.3, 0.4] # 校准后残余硬铁偏置 [µT]
+      axes_misalignment: 0.5
+      noise_density: 0.06       # [µT/√Hz]，50 Hz 时每样本 σ ≈ 0.3 µT
+      bias_instability: 0.05    # [µT]
+      bias_instability_time_constant_s: 100.0
+      random_walk: 0.0
+      noise_type: double-sided
+      temperature_bias: 0.01    # [µT/°C]
+      temperature_scale_factor: 0.0
+  barometer:                    # MS5611，按 altimeterSensor：高度 = 安装点世界 z + 常值偏差 + 白噪声 + 零偏不稳定性
+    enabled: true
+    rate_hz: 50
+    delay_s: 0.0
+    position_b_m: [0.0, 0.0, 0.0]
+    constant_bias_m: 0.2        # [m]
+    noise_density_m_sqrt_hz: 0.02 # [m/√Hz]，50 Hz 时每样本 σ ≈ 0.1 m
+    noise_type: double-sided
+    bias_instability_m: 0.02    # 递推 β(k) = decay·β(k−1) + 0.02·w [m]；平稳标准差 0.02/√(1−decay²) ≈ 0.2 m
+    decay_factor: 0.995         # 0 = 白噪声，1 = 随机游走；时间常数 −dt/ln(decay) ≈ 4 s
+  gps:                          # 按 gpsSensor，输出天线的本地 ENU 位置/速度（不输出经纬度）；位置误差一阶高斯-马尔可夫，速度误差白噪声
+    enabled: true
+    rate_hz: 10
+    delay_s: 0.12               # 接收机延迟 = 24 步；读数带自己的 time_s
+    position_b_m: [0.0, 0.0, 0.05] # 天线相对根链接原点 [m]
+    profile: rtk                # rtk（ZED-F9P 固定解）或 standard（单点 u-blox M8 级）；下面四项写数字可覆盖档位值
+    horizontal_accuracy_m: null # rtk 0.01 / standard 0.35 [m]：递推 e(k) = decay·e(k−1) + σ·w 的驱动噪声 σ
+    vertical_accuracy_m: null   # rtk 0.02 / standard 0.7 [m]
+    velocity_accuracy_m_s: null # rtk 0.05 / standard 0.1 [m/s]，白噪声
+    decay_factor: null          # rtk 0.9 / standard 0.99；平稳误差 σ/√(1−decay²)（rtk 0.023 m，standard 2.5 m），时间常数 −dt/ln(decay)
+
+estimation:                     # 控制器用哪个状态
+  mode: truth                   # truth：仿真真值（默认，行为不变）；shadow：估计器在线运行并记录，控制器仍用真值；closed_loop：控制器用估计值
+  kind: passthrough             # 目前只有 passthrough（直接返回真值，用于验证链路）；滤波器留待下一阶段

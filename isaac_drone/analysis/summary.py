@@ -54,6 +54,16 @@ def summarize_run(path) -> str:
     )
     if run["completion_time_s"] is not None:
         lines.append(f"completion criterion first met at {run['completion_time_s']:.2f} s")
+    overall = metrics["overall"]
+    if overall["estimation_position_error_rms_m"] is not None:
+        lines.append(
+            f"estimation ({run.get('estimator')}, {run.get('estimation_mode')}): truth − estimate RMS "
+            f"pos {overall['estimation_position_error_rms_m']:.4f} m, "
+            f"vel {overall['estimation_velocity_error_rms_m_s']:.4f} m/s, "
+            f"tilt {overall['estimation_tilt_error_rms_deg']:.3f}°, "
+            f"yaw {overall['estimation_yaw_error_rms_deg']:.3f}°; "
+            f"control error RMS {_cell(overall['control_position_error_rms_m'], 1, 4).strip()} m"
+        )
     if end:
         keys = ("event", "success", "physics_steps", "simulated_time_s", "error")
         lines.append("end event: " + json.dumps({key: end.get(key) for key in keys}))

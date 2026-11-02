@@ -7,6 +7,7 @@ and ``finish_step``. Frames and units follow ``isaac_drone.core.types``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Protocol
 
 import numpy as np
@@ -47,9 +48,18 @@ class VehicleBackend(Protocol):
 
 
 class StateProvider(Protocol):
-    """Sensor/estimator boundary; must use the shared CoM/frame contract."""
+    """Sensor/estimator boundary; must use the shared CoM/frame contract.
+
+    ``update`` receives the sensor readings of the physics step that just
+    finished (the ``SensorSuite`` mapping, or None without sensors) before the
+    controller reads the next state. ``read_state`` is a pure query: it must not
+    advance the estimate, because ``MotionControlLoop.reset`` queries it at t = 0
+    and the loop queries it both for the record and for the controller.
+    """
 
     def reset(self) -> None: ...
+
+    def update(self, readings: Mapping | None) -> None: ...
 
     def read_state(self, time_s: float) -> VehicleState: ...
 

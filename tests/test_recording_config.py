@@ -27,6 +27,7 @@ def test_legacy_config_loads_with_independent_recording_defaults(tmp_path):
     del cfg["recording"]
     # A disabled recorder must not constrain the old simulation frequency.
     cfg["simulation"]["dt"] = 0.1
+    cfg["sensors"]["enabled"] = False  # the default 200 Hz IMU cannot sample a 10 Hz physics step
     original = deepcopy(cfg)
     validate_config(cfg)
     assert cfg == original
@@ -109,6 +110,7 @@ def test_enabled_recording_rejects_rate_above_physics_frequency():
 def test_disabled_recording_does_not_constrain_physics_frequency():
     cfg = load_config()
     cfg["simulation"]["dt"] = 0.1
+    cfg["sensors"]["enabled"] = False  # the default 200 Hz IMU cannot sample a 10 Hz physics step
     validate_config(cfg)
 
 

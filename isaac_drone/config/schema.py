@@ -1,10 +1,12 @@
 """Experiment configuration schema (``schema_version: 2``) without importing the simulator.
 
 Sections: simulation, recording (optional), vehicle, limits, controller,
-allocation, trajectory, completion, effects, model_mismatch, scene, logging. Plugin
-sections (``controller``, ``trajectory``) are validated by the parameter
-dataclass registered for their ``kind``. Native Isaac Lab fields are validated
-against the installed classes by the backend builder.
+allocation, trajectory, completion, effects, model_mismatch, scene, logging,
+sensors (optional), estimation (optional). Plugin sections (``controller``,
+``trajectory``) are validated by the parameter dataclass registered for their
+``kind``. Native Isaac Lab fields are validated against the installed classes
+by the backend builder. The optional sections get their defaults in
+``load_config`` so configurations written before they existed stay valid.
 """
 
 from __future__ import annotations
@@ -35,6 +37,100 @@ DEFAULT_RECORDING = {
     "height": 720,
     "cameras": ["overview", "follow", "top"],
 }
+# Pixhawk 6C sensor set: ICM-42688-P IMU at the root link origin, IST8310 magnetometer, MS5611 barometer,
+# ZED-F9P-class RTK GNSS. Datasheet densities are single-sided (RMS = density·√(f_s/2)), which is the MATLAB
+# imuSensor default NoiseType "double-sided" (σ per sample = NoiseDensity·√(f_s/s), s = 2).
+# A configuration written before this section existed gets it switched off, so it records exactly what it
+# did before whatever its physics step; configs/arl_robot_1.yaml carries the same values with enabled: true.
+DEFAULT_SENSORS = {
+    "enabled": False,
+    "imu": {
+        "enabled": True,
+        "rate_hz": 200,
+        "delay_s": 0.0,
+        "position_b_m": [0.0, 0.0, 0.0],
+        "orientation_rpy_rad": [0.0, 0.0, 0.0],
+        "temperature_c": 25.0,
+        "accelerometer": {
+            "measurement_range": 156.9,
+            "resolution": 0.004788,
+            "constant_bias": [0.10, -0.08, 0.12],
+            "axes_misalignment": 0.5,
+            "noise_density": 0.000687,
+            "bias_instability": 0.0003,
+            "bias_instability_time_constant_s": 100.0,
+            "random_walk": 0.0,
+            "noise_type": "double-sided",
+            "temperature_bias": 0.0015,
+            "temperature_scale_factor": 0.006,
+        },
+        "gyroscope": {
+            "measurement_range": 34.9,
+            "resolution": 0.001065,
+            "constant_bias": [0.003, -0.002, 0.004],
+            "axes_misalignment": 0.5,
+            "noise_density": 0.0000489,
+            "bias_instability": 0.000015,
+            "bias_instability_time_constant_s": 100.0,
+            "random_walk": 0.0,
+            "noise_type": "double-sided",
+            "temperature_bias": 0.0000873,
+            "temperature_scale_factor": 0.005,
+            "acceleration_bias": 0.00018,
+        },
+        "vibration": {
+            "enabled": True,
+            "accelerometer_std_m_s2": [0.2, 0.2, 0.3],
+            "gyroscope_std_rad_s": [0.01, 0.01, 0.01],
+            "scale_with_thrust": True,
+        },
+    },
+    "magnetometer": {
+        "enabled": True,
+        "rate_hz": 50,
+        "delay_s": 0.0,
+        "orientation_rpy_rad": [0.0, 0.0, 0.0],
+        "temperature_c": 25.0,
+        "field_w_ut": [0.0, 13.0, -50.0],
+        "motor_interference_b_ut_per_n15": [0.05, 0.03, 0.10],
+        "model": {
+            "measurement_range": 1600.0,
+            "resolution": 0.3,
+            "constant_bias": [0.5, -0.3, 0.4],
+            "axes_misalignment": 0.5,
+            "noise_density": 0.06,
+            "bias_instability": 0.05,
+            "bias_instability_time_constant_s": 100.0,
+            "random_walk": 0.0,
+            "noise_type": "double-sided",
+            "temperature_bias": 0.01,
+            "temperature_scale_factor": 0.0,
+        },
+    },
+    "barometer": {
+        "enabled": True,
+        "rate_hz": 50,
+        "delay_s": 0.0,
+        "position_b_m": [0.0, 0.0, 0.0],
+        "constant_bias_m": 0.2,
+        "noise_density_m_sqrt_hz": 0.02,
+        "noise_type": "double-sided",
+        "bias_instability_m": 0.02,
+        "decay_factor": 0.995,
+    },
+    "gps": {
+        "enabled": True,
+        "rate_hz": 10,
+        "delay_s": 0.12,
+        "position_b_m": [0.0, 0.0, 0.05],
+        "profile": "rtk",
+        "horizontal_accuracy_m": None,
+        "vertical_accuracy_m": None,
+        "velocity_accuracy_m_s": None,
+        "decay_factor": None,
+    },
+}
+DEFAULT_ESTIMATION = {"mode": "truth", "kind": "passthrough"}
 ROTOR_ORDER = ["back_left_prop", "back_right_prop", "front_left_prop", "front_right_prop"]
 _SECTIONS = {
     "schema_version",
@@ -106,6 +202,8 @@ def load_config(path: str | Path = DEFAULT_CONFIG, overrides=()) -> dict:
     for assignment in overrides:
         apply_override(config, assignment)
     config.setdefault("recording", deepcopy(DEFAULT_RECORDING))
+    config.setdefault("sensors", deepcopy(DEFAULT_SENSORS))
+    config.setdefault("estimation", deepcopy(DEFAULT_ESTIMATION))
     if isinstance(config.get("logging"), dict) and config["logging"].get("run_name") is None:
         config["logging"]["run_name"] = Path(path).stem
     validate_config(config)
@@ -113,7 +211,7 @@ def load_config(path: str | Path = DEFAULT_CONFIG, overrides=()) -> dict:
 
 
 def validate_config(config: dict) -> None:
-    _keys(config, _SECTIONS | {"recording"}, _SECTIONS, "config")
+    _keys(config, _SECTIONS | {"recording", "sensors", "estimation"}, _SECTIONS, "config")
     if type(config["schema_version"]) is not int or config["schema_version"] != SCHEMA_VERSION:
         raise ConfigurationError(
             f"Only schema_version: {SCHEMA_VERSION} is supported; see docs/configuration.md for the layout"
@@ -121,6 +219,8 @@ def validate_config(config: dict) -> None:
     _finite_tree(config)
     _validate_simulation(config["simulation"])
     _validate_recording(config.get("recording", DEFAULT_RECORDING), config["simulation"]["dt"])
+    _validate_sensors(config.get("sensors", DEFAULT_SENSORS), config["simulation"])
+    _validate_estimation(config.get("estimation", DEFAULT_ESTIMATION))
     _validate_scene(config["scene"])
     _validate_vehicle(config["vehicle"], config["scene"])
     FlightLimits.from_config(config["limits"])
@@ -183,6 +283,29 @@ def _validate_recording(recording, dt):
         or len(cameras) != len(set(cameras))
     ):
         raise ConfigurationError("recording.cameras must be a nonempty list of unique overview/follow/top names")
+
+
+def _validate_sensors(sensors, simulation):
+    """Build every sensor model (enabled or not), so a typo in a disabled sensor is still an error.
+
+    Sample rates and delays are checked against the physics step only for sensors that will run.
+    """
+    from isaac_drone.sensors.suite import validate_sensors_section
+
+    try:
+        validate_sensors_section(sensors, simulation["dt"], simulation["gravity"])
+    except (ValueError, TypeError, KeyError) as error:
+        raise ConfigurationError(f"sensors: {error}") from error
+
+
+def _validate_estimation(estimation):
+    from isaac_drone.estimation import ESTIMATION_MODES, ESTIMATOR_KINDS
+
+    _keys(estimation, {"mode", "kind"}, {"mode", "kind"}, "estimation")
+    if estimation["mode"] not in ESTIMATION_MODES:
+        raise ConfigurationError(f"estimation.mode must be one of {list(ESTIMATION_MODES)}")
+    if estimation["kind"] not in ESTIMATOR_KINDS:
+        raise ConfigurationError(f"estimation.kind must be one of {list(ESTIMATOR_KINDS)}")
 
 
 def _validate_vehicle(vehicle, scene):
