@@ -1,0 +1,30 @@
+# 风作用到旋翼的 helix 实验（入门版分工）：沿桨轴的风 → 每桨等效转速偏移；桨盘平面内的风 → 质心阻力。
+# 继承 helix.yaml：关掉旧的质心 OU 力，改用世界系风场。下面是"只在 x 轴随机"的单轴 OU 示例。
+# 系数是名义值，不是辨识值（项目规定不自动套"典型无人机系数"，所以写在这里并注明来源）：
+#   c = κ / v_h ≈ 0.3 / 6.2 ≈ 0.05：BEMT 在悬停点线性化，按 8 英寸桨、悬停每桨 3.04 N 估算；桨径确认后在 0.05–0.06 间调整。
+#   k ≈ 0.5 N/(m/s)：PX4 Gazebo Iris（1.5 kg）旋翼阻力系数 0.000175 × 悬停约 794 rad/s × 4 桨 ≈ 0.56，按量级取。
+# 线性模型在总风速约 3 m/s 以内可靠（约为悬停下洗速度的一半）。
+# 换方向：direction_w 写 [0, 0, 1] 只随机 z，[1, 1, 0] 水平 45°；每个轴各自随机用 mode: axes，σ、τ 各写 3 个数。
+# 突然出现的阵风示例：gusts: [{start_time_s: 6.0, duration_s: 2.0, delta_velocity_w_m_s: [0.0, 0.0, -2.0], shape: step}]
+extends: helix.yaml
+
+effects:
+  ou_wrench:
+    enabled: false
+  wind:
+    enabled: true
+    velocity_w_m_s: [0.0, 0.0, 0.0]
+    turbulence:
+      enabled: true
+      mode: direction
+      direction_w: [1.0, 0.0, 0.0]
+      time_constant_s: 1.0
+      stationary_std_w_m_s: 1.0
+  rotor_wind:
+    enabled: true
+    axial:
+      enabled: true
+      thrust_gain_per_m_s: 0.05
+    inplane_drag:
+      enabled: true
+      drag_n_per_m_s: 0.5

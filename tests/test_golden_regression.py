@@ -1,0 +1,87 @@
+"""Closed-loop numerical regression against recorded synthetic-plant traces.
+
+tests/data/golden_synthetic.npz holds the synthetic CPU plant flying the
+minimum-time helix config for 20 s and the hold config (airborne start at
+200 rps) for 5 s. It was first recorded at commit 7a458b4 and regenerated with
+``scripts/make_golden.py`` on 2026-10-21, when the geometric controller's
+position integral was switched on and the motor model off by default. The
+optional knobs (rotor gyroscopic torque, OU wrench, model mismatch, motor model)
+are pinned off (``NEUTRAL``). Rows are subsampled every ``<name>_stride``
+physics steps (row k = state after step stride*(k+1)). Refactors must reproduce
+them to round-off; a deliberate change of flight behaviour must regenerate the
+file and say so in its commit.
+"""
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from isaac_drone.config import load_config
+from isaac_drone.runtime import MotionControlLoop
+from isaac_drone.sim.synthetic import SyntheticBackend
+
+ROOT = Path(__file__).resolve().parents[1]
+GOLDEN = np.load(Path(__file__).parent / "data" / "golden_synthetic.npz")
+CONFIGS = {"helix": ROOT / "configs/helix.yaml", "hold": ROOT / "configs/arl_robot_1.yaml"}
+TOLERANCE = {"rtol": 1e-9, "atol": 1e-9}
+NEUTRAL = [
+    "vehicle.rotor_inertia_kg_m2=null",
+    "vehicle.motor_model_enabled=false",
+    "effects.ou_wrench.enabled=false",
+    "model_mismatch={mass_ratio: 1.0, inertia_ratio: [1.0, 1.0, 1.0], "
+    "thrust_coefficient_ratio: 1.0, reaction_torque_ratio: 1.0}",
+]
+
+
+def fly(name, steps, stride=None):
+    config = load_config(CONFIGS[name], overrides=NEUTRAL)
+    plant = SyntheticBackend(config)
+    loop = MotionControlLoop(config, plant)
+    loop.reset()
+    stride = int(GOLDEN[f"{name}_stride"]) if stride is None else stride
+    rows = {key: [] for key in ("pos", "quat", "rps", "wrench", "target")}
+    errors, record = [], None
+    for index in range(steps):
+        loop.prepare_step()
+        plant.step()
+        record = loop.finish_step()
+        basic = record["basic"]
+        errors.append(basic["position_error_norm_m"])
+        if (index + 1) % stride == 0:
+            for key, value in (
+                ("pos", basic["position_w_m"]),
+                ("quat", basic["quaternion_wxyz"]),
+                ("rps", basic["motor_speed_rps"]),
+                ("wrench", record["requested_wrench_b"]),
+                ("target", basic["target_position_w_m"]),
+            ):
+                rows[key].append(value)
+    return {key: np.asarray(value) for key, value in rows.items()}, np.asarray(errors), record
+
+
+def assert_matches_golden(name, rows):
+    count = len(rows["pos"])
+    for key, actual in rows.items():
+        np.testing.assert_allclose(actual, GOLDEN[f"{name}_{key}"][:count], **TOLERANCE, err_msg=f"{name}.{key}")
+
+
+def test_helix_prefix_through_spin_up_takeoff_and_early_helix():
+    rows, _, record = fly("helix", 800)  # 4 s: spin-up, full takeoff, start of the helix
+    assert_matches_golden("helix", rows)
+    assert record["mission_phase"] == "helix"
+
+
+def test_hold_from_airborne_start():
+    rows, errors, _ = fly("hold", 1000)
+    assert_matches_golden("hold", rows)
+    assert errors.max() == pytest.approx(float(GOLDEN["hold_max_error"]), rel=1e-9)
+
+
+@pytest.mark.slow
+def test_full_minimum_time_helix_mission():
+    rows, errors, record = fly("helix", 4000)
+    assert_matches_golden("helix", rows)
+    assert errors.max() == pytest.approx(float(GOLDEN["helix_max_error"]), rel=1e-9)
+    assert np.sqrt(np.mean(errors**2)) == pytest.approx(float(GOLDEN["helix_rms_error"]), rel=1e-9)
+    assert record["mission"]["achieved"] and not record["mission"]["timed_out"]

@@ -1,0 +1,389 @@
+"""Physics-rate orchestration of trajectory, control, motor commands and effects.
+
+The simulator owns rigid-body integration; the backend advances motor dynamics.
+This module never teleports the vehicle to a commanded position. One prepare/finish
+pair brackets one external sim.step() followed by robot.update(dt).
+"""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from dataclasses import asdict
+
+import numpy as np
+
+from isaac_drone.config import assert_flight_ready
+from isaac_drone.control import BoundedAllocator, FlightLimits, VehicleModel, build_controller
+from isaac_drone.control.allocation import AllocationResult
+from isaac_drone.core.types import MassProperties, Wrench
+from isaac_drone.core.validation import finite_array
+from isaac_drone.effects import RotorGeometry, build_effects
+from isaac_drone.sim.actuation import thrust_to_motor_speeds
+from isaac_drone.telemetry.measurements import build_basic_record
+from isaac_drone.trajectories import SegmentedTrajectory, build_trajectory
+from isaac_drone.trajectories.completion import CompletionMonitor
+from isaac_drone.trajectories.feasibility import validate_trajectory_feasibility
+from isaac_drone.trajectories.min_time import plan_minimum_time
+from isaac_drone.trajectories.timing import _progress_derivatives
+
+SPIN_UP_PHASE = "spin_up"
+
+
+class MotionControlLoop:
+    """Trajectory -> controller -> allocation -> motor commands -> backend, once per physics step.
+
+    Components come from the config (``trajectory``, ``controller``, ``limits``,
+    ``completion``, ``effects``) unless injected. The controller, allocator and
+    planner are built at reset from the backend's actual mass properties and
+    geometry divided by the ``model_mismatch`` plant/model ratios (Kidambi,
+    IEEE Access 2025, Sec. II-C); an injected ``controller`` instance is reset
+    instead. The rotor gyroscopic torque (arXiv 2609.12188 eq. 7) is added to
+    the external wrench when ``vehicle.rotor_inertia_kg_m2`` is set. Wind on the
+    rotors (``effects.rotor_wind``) gets the plant's rotor geometry at reset and
+    passes per-rotor speed offsets to the backend. During the launch spin-up
+    (``vehicle.launch.spin_up_s``) the reference holds the start pose and motor
+    commands are scaled by a smooth 0..1 envelope; the trajectory starts after it.
+    """
+
+    def __init__(self, config, backend, *, trajectory=None, controller=None, effects=None, state_provider=None):
+        self.config = deepcopy(config)
+        self.backend = backend
+        self.state_provider = state_provider or backend
+        self.trajectory = trajectory or build_trajectory(config["trajectory"])
+        self.limits = FlightLimits.from_config(config["limits"])
+        self._injected_controller = controller
+        self.controller = None
+        self.effects = effects if effects is not None else build_effects(config["effects"])
+        self.mismatch = config["model_mismatch"]
+        self.rotor_inertia = config["vehicle"]["rotor_inertia_kg_m2"]
+        self.rotor_directions = np.asarray(config["vehicle"]["rotor_directions"], dtype=float)
+        self.dt_s = config["simulation"]["dt"]
+        self.decimation = config["simulation"]["control_decimation"]
+        self.spin_up_s = float(config["vehicle"]["launch"]["spin_up_s"])
+        completion = config["completion"]
+        self.mission = None if completion is None else CompletionMonitor(completion)
+        self.feasibility = None
+        self._pending = False
+        self._initialized = False
+
+    def _nominal_mass(self) -> MassProperties:
+        truth = self.backend.mass_properties()
+        scale = np.diag(1.0 / np.sqrt(np.asarray(self.mismatch["inertia_ratio"], dtype=float)))
+        inertia = scale @ truth.inertia_com_b @ scale
+        return MassProperties(truth.mass_kg / self.mismatch["mass_ratio"], inertia, truth.com_b)
+
+    def _nominal_motor(self) -> dict:
+        """Motor parameters as the model believes them; rps limits stay hardware limits."""
+        parameters = self.backend.motor_parameters()
+        ratio = self.mismatch["thrust_coefficient_ratio"]
+        return {
+            "sampled_kf": finite_array(parameters["sampled_kf"], (4,), "sampled kf") / ratio,
+            "thrust_min_n": finite_array(parameters["thrust_min_n"], (4,), "motor minimum thrust") / ratio,
+            "thrust_max_n": finite_array(parameters["thrust_max_n"], (4,), "motor maximum thrust") / ratio,
+            "rps_min": parameters["rps_min"],
+            "rps_max": parameters["rps_max"],
+            "current_rps": finite_array(parameters["current_rps"], (4,), "current motor rps"),
+        }
+
+    def _rotor_geometry(self) -> RotorGeometry:
+        """The plant's actual rotor layout and equal-share hover speeds, for wind on the rotors."""
+        positions = getattr(self.backend, "rotor_positions_b", None)
+        if positions is None:
+            raise ValueError("effects.rotor_wind needs a backend that reports rotor_positions_b")
+        truth = self.backend.mass_properties()
+        kf = finite_array(self.backend.motor_parameters()["sampled_kf"], (4,), "sampled kf")
+        weight_n = truth.mass_kg * abs(float(self.config["simulation"]["gravity"][2]))
+        axes = np.asarray(self.backend.allocation_matrix_b, dtype=float)[:3].T
+        return RotorGeometry(positions, truth.com_b, axes, np.sqrt(weight_n / 4.0 / kf))
+
+    def _gyroscopic_torque(self, truth, current_rps) -> Wrench:
+        if self.rotor_inertia is None:
+            return Wrench.zero()
+        spin = 2 * np.pi * float(self.rotor_directions @ current_rps)
+        return Wrench(np.zeros(3), np.cross(truth.angular_velocity_b, [0.0, 0.0, self.rotor_inertia * spin]))
+
+    def reset(self):
+        self._initialized, self._pending = False, False
+        launch = self.config["vehicle"]["launch"]
+        if launch["from_ground"]:
+            start = self.backend.ground_start_position(launch["ground_z_m"], launch["clearance_m"])
+            self.backend.reset(initial_position_w=start)
+        else:
+            self.backend.reset()
+        if self.state_provider is not self.backend:
+            self.state_provider.reset()
+        matrix = np.asarray(self.backend.allocation_matrix_b, dtype=float)
+        assert_flight_ready(self.config, matrix)
+        if hasattr(self.backend, "assert_control_compatible"):
+            self.backend.assert_control_compatible()
+        parameters = self._nominal_motor()
+        gravity = np.array(self.config["simulation"]["gravity"], dtype=float)
+        nominal_matrix = matrix.copy()
+        nominal_matrix[5] /= self.mismatch["reaction_torque_ratio"]
+        self.vehicle = VehicleModel(
+            self._nominal_mass(),
+            gravity,
+            nominal_matrix,
+            parameters["thrust_min_n"],
+            parameters["thrust_max_n"],
+            self.dt_s * self.decimation,
+        )
+        if self._injected_controller is not None:
+            self.controller = self._injected_controller
+            self.controller_kind = f"injected:{type(self.controller).__name__}"
+        else:
+            self.controller = build_controller(self.config["controller"], vehicle=self.vehicle, limits=self.limits)
+            self.controller_kind = self.config["controller"]["kind"]
+        self.allocator = BoundedAllocator(
+            nominal_matrix, np.array(self.config["allocation"]["weights"]), self.config["allocation"]["regularization"]
+        )
+        self.controller.reset()
+        self.step_index = 0
+        self._reference_sample_time_s = None
+        self._pre_step_truth = None
+        self._interval_reference = None
+        self._interval_diagnostics = None
+        self._previous_thrust = None
+        self._requested_wrench = Wrench.zero()
+        self._requested_thrust = None
+        self.effects.reset(self.config["simulation"]["seed"])
+        if getattr(self.effects, "needs_rotor_geometry", False):
+            self.effects.bind_rotor_geometry(self._rotor_geometry())
+        # A ground launch anchors the reference at the physical placement (backend truth); an
+        # airborne start anchors it at the state the controller observes (possibly an estimate).
+        anchor = self.backend if launch["from_ground"] else self.state_provider
+        initial = anchor.read_state(0.0)
+        self.trajectory.reset(initial, start_time_s=initial.time_s + self.spin_up_s)
+        self._plan_and_check()
+        if self.mission is not None:
+            self.mission.reset()
+        self._pending, self._initialized = False, True
+
+    @property
+    def _segmented(self) -> bool:
+        return isinstance(self.trajectory, SegmentedTrajectory)
+
+    def _plan_and_check(self):
+        """Plan null-duration segments for minimum time, then screen the nominal reference."""
+        if not self._segmented:
+            self.feasibility = None
+            return
+        vehicle = (
+            self.limits,
+            self.vehicle.mass_properties,
+            self.vehicle.gravity_w,
+            self.vehicle.allocation_matrix_b,
+            self.vehicle.thrust_min_n,
+            self.vehicle.thrust_max_n,
+        )
+        plan = None
+        if self.trajectory.planned_phases:
+            # Motor lag uses the slowest time constant of the sampling range (+dt for the discrete mixing).
+            # Kept with vehicle.motor_model_enabled false too, so switching the motor model leaves the plan unchanged.
+            thrusters = self.config["vehicle"]["thrusters"]
+            lag = self.dt_s if thrusters["use_discrete_approximation"] else 0.0
+            plan = plan_minimum_time(
+                self.trajectory,
+                *vehicle,
+                motor_time_constants_s=(max(thrusters["tau_inc_range"]) + lag, max(thrusters["tau_dec_range"]) + lag),
+            )
+        self.feasibility = {**validate_trajectory_feasibility(self.trajectory, *vehicle), "minimum_time_plan": plan}
+        if self.mission is not None:
+            end = self.trajectory.phase_boundaries_s[-1][0]
+            required = end + self.mission.params.dwell_time_s + 2 * self.dt_s
+            if self.config["simulation"]["duration_s"] < required:
+                raise ValueError(
+                    f"simulation.duration_s must allow the complete trajectory and measured hover dwell: "
+                    f"motion ends at {end:.3f} s, so duration_s >= {required:.3f} s is needed"
+                )
+
+    def phase(self, time_s: float) -> str:
+        """Mission phase at an absolute time: ``spin_up`` before the trajectory starts, then its phases."""
+        return SPIN_UP_PHASE if time_s < self.trajectory.start_time_s else self.trajectory.phase(time_s)
+
+    def reference(self, time_s: float):
+        """Trajectory reference; the start pose is held during spin-up."""
+        return self.trajectory.sample(max(time_s, self.trajectory.start_time_s))
+
+    def plan_summary(self) -> str | None:
+        """One console line describing the planned motion, or None for a pure hold."""
+        if not self._segmented or not self.trajectory.segments:
+            return None
+        from isaac_drone.trajectories.min_time import timing_summary
+
+        return timing_summary(self.feasibility)
+
+    def run_metadata(self) -> dict:
+        """Backend-independent metadata for the run directory."""
+        return {
+            "controller_kind": self.controller_kind,
+            "trajectory_feasibility": self.feasibility,
+            "mission_phases": self.phase_schedule(),
+        }
+
+    def phase_schedule(self) -> list[tuple[float, str]]:
+        """(absolute start [s], phase) of every mission phase, for metadata and figures."""
+        start = self.trajectory.start_time_s
+        schedule = [(0.0, SPIN_UP_PHASE)] if start > 0 else []
+        if self._segmented:
+            return schedule + self.trajectory.phase_boundaries_s
+        return schedule + [(start, self.trajectory.phase(start))]
+
+    def reference_path_points(self) -> np.ndarray:
+        """Planned reference CoM path (for overlays and camera framing)."""
+        if self._segmented:
+            return self.trajectory.path_points()
+        return self.trajectory.sample(self.trajectory.start_time_s).position_w[None, :]
+
+    @property
+    def time_s(self):
+        return self.step_index * self.dt_s
+
+    @property
+    def mission_status(self):
+        """Latest completion-monitor status, or None when the trajectory has no criterion."""
+        return None if self.mission is None else self.mission.status
+
+    def prepare_step(self):
+        if not self._initialized or self._pending:
+            raise RuntimeError("reset first, and finish each prepared step exactly once")
+        try:
+            return self._prepare_step()
+        except BaseException:
+            # A plugin/controller may already have advanced internal state.
+            self._initialized, self._pending = False, False
+            raise
+
+    def _prepare_step(self):
+        """Evaluate commands/effects at t[k], then apply one native motor step."""
+        if not self._initialized or self._pending:
+            raise RuntimeError("reset first, and finish each prepared physics step exactly once")
+        truth = self.backend.read_state(self.time_s)
+        self._pre_step_truth = deepcopy(truth)
+        state = truth if self.state_provider is self.backend else self.state_provider.read_state(self.time_s)
+        if self.step_index % self.decimation == 0:
+            self.setpoint = self.reference(self.time_s)
+            self._reference_sample_time_s = self.time_s
+            command = self.controller.compute(state, self.setpoint, self.dt_s * self.decimation)
+            if self.controller.output == "wrench":
+                self._requested_wrench = command
+            else:
+                self._requested_thrust = finite_array(command, (4,), "controller rotor thrust command")
+                self._requested_wrench = Wrench.from_vector(self.allocator.matrix @ self._requested_thrust)
+        self._interval_reference = deepcopy(self.setpoint)
+        # Held with the setpoint: the controller only changes them in compute().
+        self._interval_diagnostics = self.controller.diagnostics()
+        motor_parameters = self._nominal_motor()
+        lower, upper = motor_parameters["thrust_min_n"], motor_parameters["thrust_max_n"]
+        if self.controller.output == "wrench":
+            allocation = self.allocator.allocate(self._requested_wrench, lower, upper, self._previous_thrust)
+        else:
+            thrusts = np.clip(self._requested_thrust, lower, upper)
+            achieved = Wrench.from_vector(self.allocator.matrix @ thrusts)
+            allocation = AllocationResult(
+                thrusts,
+                achieved,
+                self._requested_wrench.vector - achieved.vector,
+                bool(np.any(thrusts <= lower) or np.any(thrusts >= upper)),
+            )
+        target_rps = thrust_to_motor_speeds(allocation.thrusts_n, motor_parameters["sampled_kf"], lower, upper)
+        phase = self.phase(self.time_s)
+        startup_fraction = 1.0
+        if phase == SPIN_UP_PHASE:
+            startup_fraction = float(_progress_derivatives(self.time_s / self.spin_up_s, self.spin_up_s)[0])
+            target_rps = target_rps * startup_fraction
+        # Preserve the native minimum for an enabled motor; explicit zero is
+        # stopped. Dynamics still make the actual rotor spin-up continuous.
+        target_rps = np.where(
+            target_rps == 0, 0.0, np.clip(target_rps, motor_parameters["rps_min"], motor_parameters["rps_max"])
+        )
+        effective_thrust = motor_parameters["sampled_kf"] * target_rps**2
+        effective_wrench = Wrench.from_vector(self.allocator.matrix @ effective_thrust)
+        self.controller.notify_allocation(
+            AllocationResult(
+                effective_thrust,
+                effective_wrench,
+                self._requested_wrench.vector - effective_wrench.vector,
+                allocation.saturated or startup_fraction < 1.0,
+            )
+        )
+        external = self.effects.evaluate(truth, self.dt_s)
+        offsets_method = getattr(self.effects, "rotor_speed_offsets", None)
+        offsets = None if offsets_method is None else offsets_method(truth)
+        diagnostics_method = getattr(self.effects, "diagnostics", None)
+        effects_diagnostics = {} if diagnostics_method is None else diagnostics_method(truth)
+        gyroscopic = self._gyroscopic_torque(truth, motor_parameters["current_rps"])
+        if offsets is None:
+            self.backend.apply_motor_speeds(target_rps, external + gyroscopic)
+        else:
+            self.backend.apply_motor_speeds(target_rps, external + gyroscopic, rotor_speed_offset_rps=offsets)
+        self._previous_thrust = effective_thrust.copy()
+        self._pending = True
+        self._record = {
+            "step": self.step_index,
+            "time_s": self.time_s,
+            "state_source": "simulation_truth" if self.state_provider is self.backend else "injected_state_provider",
+            "state": asdict(state),
+            "setpoint": asdict(self.setpoint),
+            "mission_phase": phase,
+            "startup_fraction": startup_fraction,
+            "motor_command_rps": target_rps,
+            "motor_command_thrust_n": effective_thrust,
+            "controller": {"kind": self.controller_kind, **self._interval_diagnostics.details},
+            "requested_wrench_b": self._requested_wrench.vector,
+            "allocated_thrust_n": allocation.thrusts_n,
+            "allocated_wrench_b": allocation.achieved_wrench.vector,
+            "allocation_residual": allocation.residual,
+            "allocation_saturated": allocation.saturated,
+            "external_wrench_b": external.vector,
+            "gyroscopic_torque_b_nm": gyroscopic.torque_b,
+            "rotor_speed_offset_rps": offsets,
+            "effects": effects_diagnostics,
+        }
+        return deepcopy(self._record)
+
+    def finish_step(self):
+        if not self._initialized or not self._pending:
+            raise RuntimeError("finish_step requires a prepared step; reset after any plugin failure")
+        try:
+            return self._finish_step()
+        except BaseException:
+            # Physics has already advanced. Retrying this interval would double
+            # count time/energy, so an explicit full reset is required.
+            self._initialized, self._pending = False, False
+            raise
+
+    def _finish_step(self):
+        """Call only after physics and backend state buffers advance by dt."""
+        if not self._pending:
+            raise RuntimeError("finish_step requires one preceding prepare_step")
+        self.step_index += 1
+        truth = self.backend.read_state(self.time_s)
+        telemetry = self.backend.telemetry()
+        self._record["post_step_state"] = asdict(truth)
+        self._record["backend"] = telemetry
+        if self.mission is not None:
+            self._record["mission"] = self.mission.update(truth, self.reference(truth.time_s), self.phase(truth.time_s))
+        else:
+            self._record["mission"] = None
+        elapsed = truth.time_s - self._pre_step_truth.time_s
+        if not np.isclose(elapsed, self.dt_s, rtol=1e-9, atol=1e-12):
+            raise ValueError("Actual state timestamps must span exactly one physics step")
+        self._record["basic"] = build_basic_record(
+            self._pre_step_truth,
+            truth,
+            self._interval_reference,
+            self._reference_sample_time_s,
+            self.backend.mass_properties(),
+            telemetry,
+            Wrench.from_vector(self._record["requested_wrench_b"]),
+            Wrench.from_vector(self._record["allocated_wrench_b"]),
+            Wrench.from_vector(self._record["external_wrench_b"]),
+            desired_rotation_w=self._interval_diagnostics.desired_rotation_w,
+            desired_angular_velocity_d=self._interval_diagnostics.desired_angular_velocity_d,
+            motor_command_rps=self._record["motor_command_rps"],
+            effects=self._record["effects"],
+            rotor_speed_offset_rps=self._record["rotor_speed_offset_rps"],
+        )
+        self._pending = False
+        return deepcopy(self._record)
